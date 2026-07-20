@@ -312,6 +312,13 @@ if st.session_state.screen in ["lobby", "game"]:
             else:
                 st.session_state.screen = "game"
 
+                # po każdym wejściu w ekran gry czyścimy bufor litery
+                if "guess_letter" not in st.session_state:
+                    st.session_state.guess_letter = ""
+                else:
+                    # nie ruszamy guess_letter w trakcie wpisywania; będzie nadpisane przy następnym przebiegu
+                    ...
+
                 phrase = room.get("current_phrase") or ""
                 category = room.get("current_category") or "Bez kategorii"
                 guessed_letters = room.get("guessed_letters") or []
@@ -363,11 +370,15 @@ if st.session_state.screen in ["lobby", "game"]:
 
                     if my_turn and current_spin_value > 0:
                         with st.form("guess_form"):
-                            st.text_input("Podaj literę", max_chars=1, key="guess_letter")
+                            letter_input = st.text_input(
+                                "Podaj literę",
+                                max_chars=1,
+                                key="guess_letter"
+                            )
                             submitted = st.form_submit_button("Zgadnij literę")
 
                         if submitted:
-                            letter = st.session_state.guess_letter.strip().upper()
+                            letter = (letter_input or "").strip().upper()
 
                             if not letter or letter not in string.ascii_uppercase + "ĄĆĘŁŃÓŚŹŻ":
                                 st.error("Podaj jedną literę.")
@@ -401,11 +412,9 @@ if st.session_state.screen in ["lobby", "game"]:
                                         .execute()
                                     )
 
-                                    st.session_state.guess_letter = ""
                                     st.success(f"Trafiona litera: {letter}. Zdobywasz {occurrences * current_spin_value} pkt.")
                                     st.rerun()
                                 else:
-                                    st.session_state.guess_letter = ""
                                     next_turn(supabase, st.session_state.created_room_id, current_turn_index)
                                     st.error(f"Brak litery: {letter}. Kolejka przechodzi dalej.")
                                     st.rerun()
