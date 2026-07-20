@@ -72,7 +72,7 @@ if st.session_state.screen == "home":
                             "room_id": room_id,
                             "nickname": clean_nick,
                             "is_host": True,
-                            "score": 0
+                            "total_score": 0
                         })
                         .execute()
                     )
