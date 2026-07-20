@@ -81,7 +81,7 @@ def get_room_and_players(supabase, room_id):
         supabase.table("game_players")
         .select("id, nickname, is_host, total_score")
         .eq("room_id", room_id)
-        .order("created_at", desc=False)
+        .order("is_host", desc=True)
         .execute()
     )
 
