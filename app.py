@@ -51,7 +51,7 @@ if st.session_state.screen == "home":
                     supabase = get_supabase()
                     room_code = generate_room_code()
 
-                    response = (
+                    room_response = (
                         supabase.table("game_rooms")
                         .insert({
                             "room_code": room_code,
@@ -63,10 +63,23 @@ if st.session_state.screen == "home":
                         .execute()
                     )
 
-                    created_room = response.data[0]
+                    created_room = room_response.data[0]
+                    room_id = created_room["id"]
+
+                    (
+                        supabase.table("game_players")
+                        .insert({
+                            "room_id": room_id,
+                            "nickname": clean_nick,
+                            "is_host": True,
+                            "score": 0
+                        })
+                        .execute()
+                    )
+
                     st.session_state.nickname = clean_nick
                     st.session_state.created_room_code = created_room["room_code"]
-                    st.session_state.created_room_id = created_room["id"]
+                    st.session_state.created_room_id = room_id
                     st.session_state.screen = "room_created"
                     st.rerun()
 
@@ -85,10 +98,9 @@ if st.session_state.screen == "home":
 
 if st.session_state.screen == "room_created":
     st.subheader("Pokój utworzony")
-    st.success("Twój pokój został utworzony.")
+    st.success("Twój pokój został utworzony, a host został dodany do pokoju.")
     st.write(f"**Nick hosta:** {st.session_state.nickname}")
     st.write(f"**Kod pokoju:** {st.session_state.created_room_code}")
-    st.info("Za chwilę dodamy automatyczne dołączanie hosta do pokoju oraz prawdziwe dołączanie kolejnych graczy.")
 
     if st.button("Wróć do strony głównej"):
         st.session_state.screen = "home"
