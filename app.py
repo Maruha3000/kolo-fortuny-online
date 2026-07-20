@@ -85,7 +85,7 @@ if st.session_state.screen == "home":
 
 if st.session_state.screen == "room_created":
     st.subheader("Pokój utworzony")
-    st.success(f"Twój pokój został utworzony.")
+    st.success("Twój pokój został utworzony.")
     st.write(f"**Nick hosta:** {st.session_state.nickname}")
     st.write(f"**Kod pokoju:** {st.session_state.created_room_code}")
     st.info("Za chwilę dodamy automatyczne dołączanie hosta do pokoju oraz prawdziwe dołączanie kolejnych graczy.")
