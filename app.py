@@ -11,6 +11,7 @@ DEFAULTS = {
     "created_room_code": "",
     "created_room_id": "",
     "is_host": False,
+    "guess_letter": "",
 }
 
 PHRASES = [
@@ -362,11 +363,11 @@ if st.session_state.screen in ["lobby", "game"]:
 
                     if my_turn and current_spin_value > 0:
                         with st.form("guess_form"):
-                            guessed_letter_input = st.text_input("Podaj literę", max_chars=1)
+                            st.text_input("Podaj literę", max_chars=1, key="guess_letter")
                             submitted = st.form_submit_button("Zgadnij literę")
 
                         if submitted:
-                            letter = guessed_letter_input.strip().upper()
+                            letter = st.session_state.guess_letter.strip().upper()
 
                             if not letter or letter not in string.ascii_uppercase + "ĄĆĘŁŃÓŚŹŻ":
                                 st.error("Podaj jedną literę.")
@@ -400,9 +401,11 @@ if st.session_state.screen in ["lobby", "game"]:
                                         .execute()
                                     )
 
+                                    st.session_state.guess_letter = ""
                                     st.success(f"Trafiona litera: {letter}. Zdobywasz {occurrences * current_spin_value} pkt.")
                                     st.rerun()
                                 else:
+                                    st.session_state.guess_letter = ""
                                     next_turn(supabase, st.session_state.created_room_id, current_turn_index)
                                     st.error(f"Brak litery: {letter}. Kolejka przechodzi dalej.")
                                     st.rerun()
