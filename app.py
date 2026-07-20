@@ -5,20 +5,17 @@ from supabase import create_client
 
 st.set_page_config(page_title="Koło Fortuny Online", page_icon="🎡", layout="centered")
 
-if "screen" not in st.session_state:
-    st.session_state.screen = "home"
+DEFAULTS = {
+    "screen": "home",
+    "nickname": "",
+    "created_room_code": "",
+    "created_room_id": "",
+    "is_host": False,
+}
 
-if "nickname" not in st.session_state:
-    st.session_state.nickname = ""
-
-if "created_room_code" not in st.session_state:
-    st.session_state.created_room_code = ""
-
-if "created_room_id" not in st.session_state:
-    st.session_state.created_room_id = ""
-
-if "is_host" not in st.session_state:
-    st.session_state.is_host = False
+for key, value in DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 def get_supabase():
@@ -32,18 +29,25 @@ def generate_room_code(length=6):
     return "".join(random.choice(chars) for _ in range(length))
 
 
+def open_room(room_id, room_code, nickname, is_host):
+    st.session_state.created_room_id = room_id
+    st.session_state.created_room_code = room_code
+    st.session_state.nickname = nickname
+    st.session_state.is_host = is_host
+    st.session_state.screen = "lobby"
+    st.rerun()
+
+
 st.title("🎡 Koło Fortuny Online")
 st.caption("Graj online ze znajomymi w jednym pokoju.")
 
 if st.session_state.screen == "home":
-    st.write("")
     nickname = st.text_input(
         "Twój nick",
         value=st.session_state.nickname,
         placeholder="Wpisz nick, np. Artur"
     )
 
-    st.write("")
     col1, col2 = st.columns(2)
 
     with col1:
@@ -69,13 +73,12 @@ if st.session_state.screen == "home":
                         .execute()
                     )
 
-                    created_room = room_response.data[0]
-                    room_id = created_room["id"]
+                    room = room_response.data[0]
 
                     (
                         supabase.table("game_players")
                         .insert({
-                            "room_id": room_id,
+                            "room_id": room["id"],
                             "nickname": clean_nick,
                             "is_host": True,
                             "total_score": 0
@@ -83,12 +86,12 @@ if st.session_state.screen == "home":
                         .execute()
                     )
 
-                    st.session_state.nickname = clean_nick
-                    st.session_state.created_room_code = created_room["room_code"]
-                    st.session_state.created_room_id = room_id
-                    st.session_state.is_host = True
-                    st.session_state.screen = "room_created"
-                    st.rerun()
+                    open_room(
+                        room["id"],
+                        room["room_code"],
+                        clean_nick,
+                        True
+                    )
 
                 except Exception as e:
                     st.error(f"Nie udało się utworzyć pokoju: {e}")
@@ -104,28 +107,14 @@ if st.session_state.screen == "home":
                 st.session_state.screen = "join_room"
                 st.rerun()
 
-if st.session_state.screen == "room_created":
-    st.subheader("Pokój gotowy")
-
-    if st.session_state.is_host:
-        st.success("Pokój został utworzony, a host został dodany do pokoju.")
-    else:
-        st.success("Pomyślnie dołączyłeś do istniejącego pokoju.")
-
-    st.write(f"**Twój nick:** {st.session_state.nickname}")
-    st.write(f"**Kod pokoju:** {st.session_state.created_room_code}")
-    st.write(f"**ID pokoju:** {st.session_state.created_room_id}")
-
-    if st.button("Wróć do strony głównej"):
-        st.session_state.screen = "home"
-        st.rerun()
 
 if st.session_state.screen == "join_room":
-    st.divider()
     st.subheader("Dołączanie do pokoju")
 
-    room_code_input = st.text_input("Kod pokoju", placeholder="Np. ABC123")
-    st.caption("Użyj kodu, który dostałeś od hosta.")
+    room_code_input = st.text_input(
+        "Kod pokoju",
+        placeholder="Np. ABC123"
+    )
 
     col_back, col_join = st.columns(2)
 
@@ -139,9 +128,7 @@ if st.session_state.screen == "join_room":
             clean_nick = st.session_state.nickname.strip()
             room_code_clean = room_code_input.strip().upper()
 
-            if len(clean_nick) < 2:
-                st.error("Nick musi mieć co najmniej 2 znaki.")
-            elif len(room_code_clean) == 0:
+            if not room_code_clean:
                 st.error("Podaj kod pokoju.")
             else:
                 try:
@@ -159,25 +146,112 @@ if st.session_state.screen == "join_room":
                         st.error("Nie znaleziono pokoju o takim kodzie.")
                     else:
                         room = room_response.data[0]
-                        room_id = room["id"]
 
-                        (
-                            supabase.table("game_players")
-                            .insert({
-                                "room_id": room_id,
-                                "nickname": clean_nick,
-                                "is_host": False,
-                                "total_score": 0
-                            })
-                            .execute()
-                        )
+                        if room["status"] != "waiting":
+                            st.error("Ta gra już się rozpoczęła.")
+                        else:
+                            existing_player = (
+                                supabase.table("game_players")
+                                .select("id")
+                                .eq("room_id", room["id"])
+                                .eq("nickname", clean_nick)
+                                .limit(1)
+                                .execute()
+                            )
 
-                        st.session_state.nickname = clean_nick
-                        st.session_state.created_room_code = room["room_code"]
-                        st.session_state.created_room_id = room_id
-                        st.session_state.is_host = False
-                        st.session_state.screen = "room_created"
-                        st.rerun()
+                            if not existing_player.data:
+                                (
+                                    supabase.table("game_players")
+                                    .insert({
+                                        "room_id": room["id"],
+                                        "nickname": clean_nick,
+                                        "is_host": False,
+                                        "total_score": 0
+                                    })
+                                    .execute()
+                                )
+
+                            open_room(
+                                room["id"],
+                                room["room_code"],
+                                clean_nick,
+                                False
+                            )
 
                 except Exception as e:
                     st.error(f"Nie udało się dołączyć do pokoju: {e}")
+
+
+if st.session_state.screen == "lobby":
+    st.subheader("Poczekalnia")
+    st.success(f"Jesteś w pokoju: {st.session_state.created_room_code}")
+    st.write(f"**Twój nick:** {st.session_state.nickname}")
+
+    try:
+        supabase = get_supabase()
+
+        room_response = (
+            supabase.table("game_rooms")
+            .select("status")
+            .eq("id", st.session_state.created_room_id)
+            .limit(1)
+            .execute()
+        )
+
+        players_response = (
+            supabase.table("game_players")
+            .select("nickname, is_host, total_score")
+            .eq("room_id", st.session_state.created_room_id)
+            .order("is_host", desc=True)
+            .execute()
+        )
+
+        room_status = room_response.data[0]["status"]
+        players = players_response.data
+
+        st.write("### Gracze w pokoju")
+
+        for player in players:
+            host_label = " — host" if player["is_host"] else ""
+            st.write(f"• {player['nickname']}{host_label}")
+
+        st.caption(
+            f"Liczba graczy: {len(players)}. "
+            "Kliknij „Odśwież listę”, aby zobaczyć osoby, które właśnie dołączyły."
+        )
+
+        col_refresh, col_action = st.columns(2)
+
+        with col_refresh:
+            if st.button("Odśwież listę", use_container_width=True):
+                st.rerun()
+
+        with col_action:
+            if st.session_state.is_host:
+                if room_status == "waiting":
+                    if st.button(
+                        "Rozpocznij grę",
+                        type="primary",
+                        use_container_width=True
+                    ):
+                        (
+                            supabase.table("game_rooms")
+                            .update({"status": "playing"})
+                            .eq("id", st.session_state.created_room_id)
+                            .execute()
+                        )
+                        st.rerun()
+                else:
+                    st.success("Gra wystartowała — kolejne mechaniki dodamy teraz.")
+            else:
+                if room_status == "waiting":
+                    st.info("Czekasz, aż host rozpocznie grę.")
+                else:
+                    st.success("Host rozpoczął grę — kolejne mechaniki dodamy teraz.")
+
+        if st.button("Opuść ekran pokoju"):
+            st.session_state.screen = "home"
+            st.rerun()
+
+    except Exception as e:
+        st.error(f"Nie udało się wczytać pokoju: {e}")
