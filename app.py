@@ -3,6 +3,7 @@ import string
 import time
 import streamlit as st
 from supabase import create_client
+from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Koło Fortuny Online", page_icon="🎡", layout="centered")
 
@@ -13,7 +14,6 @@ DEFAULTS = {
     "created_room_id": "",
     "is_host": False,
     "guess_letter": "",
-    "last_refresh_ts": 0.0,
 }
 
 PHRASES = [
@@ -26,8 +26,6 @@ PHRASES = [
 ]
 
 WHEEL_VALUES = [100, 150, 200, 250, 300, 400, 500, 700]
-
-REFRESH_INTERVAL_SECONDS = 2.0  # co ile sekund obserwatorzy odświeżają stan
 
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
@@ -287,6 +285,10 @@ if st.session_state.screen == "join_room":
 # ---------- POCZEKALNIA / GRA ----------
 
 if st.session_state.screen in ["lobby", "game"]:
+    # Auto-odświeżanie w poczekalni i w grze co 2 sekundy
+    # debounce=True zmniejsza liczbę rerunów podczas interakcji
+    st_autorefresh(interval=2000, key="auto_refresh", debounce=True)
+
     try:
         supabase = get_supabase()
         room, players = get_room_and_players(supabase, st.session_state.created_room_id)
@@ -336,13 +338,7 @@ if st.session_state.screen in ["lobby", "game"]:
                     None
                 )
 
-                # AUTO-REFRESH TYLKO, GDY TO NIE JEST TWOJA TURA
-                now = time.time()
                 my_turn = current_player and my_player and current_player["id"] == my_player["id"]
-
-                if (not my_turn) and (now - st.session_state.last_refresh_ts > REFRESH_INTERVAL_SECONDS):
-                    st.session_state.last_refresh_ts = now
-                    st.rerun()
 
                 st.subheader("Gra trwa")
                 st.write(f"**Kod pokoju:** {st.session_state.created_room_code}")
@@ -366,7 +362,6 @@ if st.session_state.screen in ["lobby", "game"]:
                         if st.button("Odśwież stan gry", use_container_width=True):
                             st.rerun()
 
-                    # przycisk koła i zgadywanie tylko dla gracza, który ma turę
                     with col_spin:
                         if my_turn:
                             if current_spin_value == 0:
