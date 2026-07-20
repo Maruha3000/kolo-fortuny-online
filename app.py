@@ -1,5 +1,6 @@
 import random
 import string
+import time
 import streamlit as st
 from supabase import create_client
 
@@ -12,6 +13,7 @@ DEFAULTS = {
     "created_room_id": "",
     "is_host": False,
     "guess_letter": "",
+    "last_refresh_ts": 0.0,
 }
 
 PHRASES = [
@@ -24,6 +26,8 @@ PHRASES = [
 ]
 
 WHEEL_VALUES = [100, 150, 200, 250, 300, 400, 500, 700]
+
+REFRESH_INTERVAL_SECONDS = 2.0  # co ile sekund obserwatorzy odświeżają stan
 
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
@@ -144,6 +148,8 @@ def spin_wheel(supabase, room_id):
 st.title("🎡 Koło Fortuny Online")
 st.caption("Graj online ze znajomymi w jednym pokoju.")
 
+# ---------- EKRAN STARTOWY ----------
+
 if st.session_state.screen == "home":
     nickname = st.text_input(
         "Twój nick",
@@ -211,6 +217,8 @@ if st.session_state.screen == "home":
                 st.rerun()
 
 
+# ---------- DOŁĄCZANIE DO POKOJU ----------
+
 if st.session_state.screen == "join_room":
     st.subheader("Dołączanie do pokoju")
 
@@ -276,6 +284,8 @@ if st.session_state.screen == "join_room":
                     st.error(f"Nie udało się dołączyć do pokoju: {e}")
 
 
+# ---------- POCZEKALNIA / GRA ----------
+
 if st.session_state.screen in ["lobby", "game"]:
     try:
         supabase = get_supabase()
@@ -310,14 +320,8 @@ if st.session_state.screen in ["lobby", "game"]:
                         st.info("Czekasz, aż host rozpocznie grę.")
 
             else:
+                # --------- GRA TRWA ---------
                 st.session_state.screen = "game"
-
-                # po każdym wejściu w ekran gry czyścimy bufor litery
-                if "guess_letter" not in st.session_state:
-                    st.session_state.guess_letter = ""
-                else:
-                    # nie ruszamy guess_letter w trakcie wpisywania; będzie nadpisane przy następnym przebiegu
-                    ...
 
                 phrase = room.get("current_phrase") or ""
                 category = room.get("current_category") or "Bez kategorii"
@@ -331,6 +335,14 @@ if st.session_state.screen in ["lobby", "game"]:
                     (p for p in players if p["nickname"] == st.session_state.nickname),
                     None
                 )
+
+                # AUTO-REFRESH TYLKO, GDY TO NIE JEST TWOJA TURA
+                now = time.time()
+                my_turn = current_player and my_player and current_player["id"] == my_player["id"]
+
+                if (not my_turn) and (now - st.session_state.last_refresh_ts > REFRESH_INTERVAL_SECONDS):
+                    st.session_state.last_refresh_ts = now
+                    st.rerun()
 
                 st.subheader("Gra trwa")
                 st.write(f"**Kod pokoju:** {st.session_state.created_room_code}")
@@ -354,8 +366,7 @@ if st.session_state.screen in ["lobby", "game"]:
                         if st.button("Odśwież stan gry", use_container_width=True):
                             st.rerun()
 
-                    my_turn = current_player and my_player and current_player["id"] == my_player["id"]
-
+                    # przycisk koła i zgadywanie tylko dla gracza, który ma turę
                     with col_spin:
                         if my_turn:
                             if current_spin_value == 0:
