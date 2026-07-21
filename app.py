@@ -152,22 +152,9 @@ def spin_wheel(supabase, room_id, player_nickname):
     return spin_value
 
 
-def finish_spin(supabase, room_id):
-    (
-        supabase.table("game_rooms")
-        .update({"spin_status": "finished"})
-        .eq("id", room_id)
-        .execute()
-    )
-
-
 # ========== KOMPONENT HTML+JS: ANIMOWANE KOŁO ==========
 
 def render_wheel(spin_status, spin_value, player_name, is_my_turn):
-    """
-    Renders an animated CSS wheel. All players see the same animation state
-    because spin_status / spin_value / last_spin_player are stored in Supabase.
-    """
     colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"]
     segments = len(WHEEL_VALUES)
     angle_per_segment = 360 / segments
@@ -197,17 +184,13 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn):
     # Determine animation class / state
     if spin_status == "spinning":
         anim_class = "wheel-spinning"
-        # JS will animate from 0 to spin_degrees over ~3s
         wheel_style = f"transform: rotate({spin_degrees}deg); transition: transform 3s cubic-bezier(0.25, 0.1, 0.25, 1);"
-        overlay_visible = "true"
     elif spin_status == "finished":
         anim_class = "wheel-finished"
         wheel_style = f"transform: rotate({spin_degrees}deg); transition: none;"
-        overlay_visible = "false"
     else:
         anim_class = "wheel-idle"
         wheel_style = "transform: rotate(0deg); transition: none;"
-        overlay_visible = "false"
 
     html = f"""
     <style>
@@ -298,12 +281,8 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn):
     # Place value labels on the wheel
     for i, val in enumerate(WHEEL_VALUES):
         mid_angle = i * angle_per_segment + angle_per_segment / 2
-        # Position label at ~60% radius from center
-        rad = math.radians(mid_angle)
-        x = 50 + 35 * math.cos(rad)
-        y = 50 + 35 * math.sin(rad)
-        html += f'            <div class="wheel-label" style="transform: translate(-50%, -50%) rotate({mid_angle}deg) translateY(-75px);">{val}</div>
-'
+        label_style = f"transform: translate(-50%, -50%) rotate({mid_angle}deg) translateY(-75px);"
+        html += f'            <div class="wheel-label" style="{label_style}">{val}</div>\n'
 
     html += f"""
         </div>
@@ -317,11 +296,9 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn):
     (function() {{
         const overlay = document.getElementById('spinOverlay');
         const status = "{spin_status}";
-        const isMyTurn = {"true" if is_my_turn else "false"};
 
         if (status === "spinning") {{
             overlay.style.display = "none";
-            // After 3s animation, show result
             setTimeout(() => {{
                 overlay.style.display = "block";
                 overlay.innerHTML = '<div>🎯 {spin_value} pkt</div><div style="font-size:13px;margin-top:4px;opacity:0.85;">{player_name or ""}</div>';
@@ -567,7 +544,6 @@ if st.session_state.screen in ["lobby", "game"]:
                                 st.info("Koło się kręci... poczekaj!")
                             else:  # finished
                                 st.success(f"Koło pokazuje: {current_spin_value} pkt")
-                                # Po zakończeniu animacji gracz może zgadywać
                         else:
                             if spin_status == "spinning":
                                 st.info(f"{last_spin_player} kręci kołem...")
