@@ -1,6 +1,5 @@
 import random
 import string
-import time
 import streamlit as st
 from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
@@ -286,7 +285,6 @@ if st.session_state.screen == "join_room":
 
 if st.session_state.screen in ["lobby", "game"]:
     # Auto-odświeżanie w poczekalni i w grze co 2 sekundy
-    # debounce=True zmniejsza liczbę rerunów podczas interakcji
     st_autorefresh(interval=2000, key="auto_refresh", debounce=True)
 
     try:
@@ -374,16 +372,18 @@ if st.session_state.screen in ["lobby", "game"]:
                         else:
                             st.warning("To nie Twoja tura.")
 
+                    # --- ZGADYWANIE LITERY + CAŁEGO HASŁA ---
                     if my_turn and current_spin_value > 0:
+                        # Formularz na literę
                         with st.form("guess_form"):
                             letter_input = st.text_input(
                                 "Podaj literę",
                                 max_chars=1,
                                 key="guess_letter"
                             )
-                            submitted = st.form_submit_button("Zgadnij literę")
+                            submitted_letter = st.form_submit_button("Zgadnij literę")
 
-                        if submitted:
+                        if submitted_letter:
                             letter = (letter_input or "").strip().upper()
 
                             if not letter or letter not in string.ascii_uppercase + "ĄĆĘŁŃÓŚŹŻ":
@@ -424,6 +424,33 @@ if st.session_state.screen in ["lobby", "game"]:
                                     next_turn(supabase, st.session_state.created_room_id, current_turn_index)
                                     st.error(f"Brak litery: {letter}. Kolejka przechodzi dalej.")
                                     st.rerun()
+
+                        # Formularz na całe hasło
+                        with st.form("guess_phrase_form"):
+                            full_guess = st.text_input("Zgadnij całe hasło")
+                            submitted_phrase = st.form_submit_button("Sprawdź hasło")
+
+                        if submitted_phrase:
+                            clean_guess = normalize_phrase(full_guess)
+                            if not clean_guess:
+                                st.error("Wpisz hasło.")
+                            elif clean_guess == phrase:
+                                st.success(f"Brawo! Odgadłeś hasło: {phrase}")
+
+                                # odsłaniamy całe hasło dla wszystkich
+                                all_letters = list(set(list(phrase.replace(" ", ""))))
+                                (
+                                    supabase.table("game_rooms")
+                                    .update({"guessed_letters": all_letters})
+                                    .eq("id", st.session_state.created_room_id)
+                                    .execute()
+                                )
+
+                                st.rerun()
+                            else:
+                                st.error("Hasło nieprawidłowe. Tracisz kolejkę.")
+                                next_turn(supabase, st.session_state.created_room_id, current_turn_index)
+                                st.rerun()
 
                 if st.button("Wróć do strony głównej"):
                     st.session_state.screen = "home"
