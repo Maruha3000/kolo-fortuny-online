@@ -594,7 +594,7 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
 st.title("🎡 Koło Fortuny Online")
 st.caption("Graj online ze znajomymi w jednym pokoju.")
 
-st.components.v1.html(get_sounds_js(), height=0)
+st.components.v1.html(get_sounds_js(), height=10)
 
 if st.session_state.screen == "home":
     nickname = st.text_input(
