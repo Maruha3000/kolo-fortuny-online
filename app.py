@@ -104,7 +104,6 @@ def mask_phrase(phrase, guessed_letters):
 
 
 def safe_list(value):
-    """Convert None/NULL to empty list, or return list as-is."""
     if value is None:
         return []
     if isinstance(value, list):
@@ -113,7 +112,6 @@ def safe_list(value):
 
 
 def text_to_list(text_value):
-    """Convert comma-separated text to list. Handles None, arrays, and strings."""
     if text_value is None:
         return []
     if isinstance(text_value, list):
@@ -126,7 +124,6 @@ def text_to_list(text_value):
 
 
 def list_to_text(list_value):
-    """Convert list to comma-separated text."""
     if list_value is None:
         return ""
     if isinstance(list_value, list):
@@ -166,11 +163,12 @@ def start_game_for_room(supabase, room_id):
     selected = random.choice(PHRASES)
     phrase = normalize_phrase(selected["phrase"])
 
+    # Only update columns that existed in original working version
     update_data = {
         "status": "playing",
         "current_phrase": phrase,
         "current_category": selected["category"],
-        "guessed_letters": "",
+        "guessed_letters": [],
         "current_turn_index": 0,
         "current_spin_value": 0,
         "spin_status": "idle",
@@ -179,14 +177,6 @@ def start_game_for_room(supabase, room_id):
         "spin_timestamp": None,
     }
 
-    try:
-        update_data["current_round"] = 1
-        update_data["round_phrases"] = phrase
-        update_data["used_phrases"] = phrase
-        update_data["game_phase"] = "playing"
-    except Exception:
-        pass
-
     (
         supabase.table("game_rooms")
         .update(update_data)
@@ -194,15 +184,10 @@ def start_game_for_room(supabase, room_id):
         .execute()
     )
 
-    # Reset round scores for all players
+    # Reset scores
     players = supabase.table("game_players").select("id").eq("room_id", room_id).execute()
     for p in players.data:
-        player_update = {"total_score": 0}
-        try:
-            player_update["round_scores"] = ""
-        except Exception:
-            pass
-        supabase.table("game_players").update(player_update).eq("id", p["id"]).execute()
+        supabase.table("game_players").update({"total_score": 0}).eq("id", p["id"]).execute()
 
 
 def next_round(supabase, room_id, used_phrases, current_round):
@@ -217,7 +202,7 @@ def next_round(supabase, room_id, used_phrases, current_round):
     update_data = {
         "current_phrase": phrase,
         "current_category": selected["category"],
-        "guessed_letters": "",
+        "guessed_letters": [],
         "current_turn_index": 0,
         "current_spin_value": 0,
         "spin_status": "idle",
@@ -226,44 +211,12 @@ def next_round(supabase, room_id, used_phrases, current_round):
         "spin_timestamp": None,
     }
 
-    try:
-        update_data["current_round"] = current_round + 1
-        update_data["round_phrases"] = list_to_text(new_used)
-        update_data["used_phrases"] = list_to_text(new_used)
-        update_data["game_phase"] = "playing"
-    except Exception:
-        pass
-
     (
         supabase.table("game_rooms")
         .update(update_data)
         .eq("id", room_id)
         .execute()
     )
-
-
-def show_round_summary(supabase, room_id):
-    try:
-        (
-            supabase.table("game_rooms")
-            .update({"game_phase": "round_summary"})
-            .eq("id", room_id)
-            .execute()
-        )
-    except Exception:
-        pass
-
-
-def show_game_over(supabase, room_id):
-    try:
-        (
-            supabase.table("game_rooms")
-            .update({"game_phase": "game_over"})
-            .eq("id", room_id)
-            .execute()
-        )
-    except Exception:
-        pass
 
 
 def next_turn(supabase, room_id, current_turn_index):
@@ -662,62 +615,38 @@ if st.session_state.screen == "home":
                     supabase = get_supabase()
                     room_code = generate_room_code()
 
-                    # Minimal insert - only columns that definitely exist
-                    insert_data = {
-                        "room_code": room_code,
-                        "status": "waiting",
-                        "category_mode": "all",
-                        "current_phrase": None,
-                        "current_category": None,
-                        "current_turn_index": 0,
-                        "current_spin_value": 0,
-                        "last_spin_value": 0,
-                        "last_spin_player": None,
-                        "spin_timestamp": None,
-                    }
-
-                    # Try optional columns one by one
-                    optional_room_cols = [
-                        ("guessed_letters", ""),
-                        ("selected_categories", ""),
-                        ("spin_status", "idle"),
-                        ("current_round", 1),
-                        ("game_phase", "playing"),
-                        ("round_phrases", ""),
-                        ("used_phrases", ""),
-                    ]
-
-                    for col_name, default_val in optional_room_cols:
-                        try:
-                            test = supabase.table("game_rooms").select(col_name).limit(0).execute()
-                            insert_data[col_name] = default_val
-                        except Exception:
-                            pass
-
+                    # EXACT same insert as original working version
+                    # Only columns that were in the original app.py
                     room_response = (
                         supabase.table("game_rooms")
-                        .insert(insert_data)
+                        .insert({
+                            "room_code": room_code,
+                            "status": "waiting",
+                            "category_mode": "all",
+                            "selected_categories": [],
+                            "current_phrase": None,
+                            "current_category": None,
+                            "guessed_letters": [],
+                            "current_turn_index": 0,
+                            "current_spin_value": 0,
+                            "spin_status": "idle",
+                            "last_spin_value": 0,
+                            "last_spin_player": None,
+                            "spin_timestamp": None,
+                        })
                         .select("id, room_code")
                         .execute()
                     )
                     room = room_response.data[0]
 
-                    player_insert = {
-                        "room_id": room["id"],
-                        "nickname": clean_nick,
-                        "is_host": True,
-                        "total_score": 0,
-                    }
-
-                    try:
-                        test = supabase.table("game_players").select("round_scores").limit(0).execute()
-                        player_insert["round_scores"] = ""
-                    except Exception:
-                        pass
-
                     (
                         supabase.table("game_players")
-                        .insert(player_insert)
+                        .insert({
+                            "room_id": room["id"],
+                            "nickname": clean_nick,
+                            "is_host": True,
+                            "total_score": 0,
+                        })
                         .execute()
                     )
                     open_room(room["id"], room["room_code"], clean_nick, True)
@@ -779,20 +708,14 @@ if st.session_state.screen == "join_room":
                                 .execute()
                             )
                             if not existing_player.data:
-                                player_insert = {
-                                    "room_id": room["id"],
-                                    "nickname": clean_nick,
-                                    "is_host": False,
-                                    "total_score": 0,
-                                }
-                                try:
-                                    test = supabase.table("game_players").select("round_scores").limit(0).execute()
-                                    player_insert["round_scores"] = ""
-                                except Exception:
-                                    pass
                                 (
                                     supabase.table("game_players")
-                                    .insert(player_insert)
+                                    .insert({
+                                        "room_id": room["id"],
+                                        "nickname": clean_nick,
+                                        "is_host": False,
+                                        "total_score": 0,
+                                    })
                                     .execute()
                                 )
                             open_room(room["id"], room["room_code"], clean_nick, False)
@@ -840,21 +763,25 @@ if st.session_state.screen in ["lobby", "game"]:
 
                 phrase = room.get("current_phrase") or ""
                 category = room.get("current_category") or "Bez kategorii"
-
-                # Handle guessed_letters as text (comma-separated) or array
-                guessed_letters_raw = room.get("guessed_letters")
-                guessed_letters = text_to_list(guessed_letters_raw)
-
+                guessed_letters = safe_list(room.get("guessed_letters"))
                 current_turn_index = room.get("current_turn_index") or 0
                 current_spin_value = room.get("current_spin_value") or 0
                 spin_status = room.get("spin_status") or "idle"
                 last_spin_value = room.get("last_spin_value") or 0
                 last_spin_player = room.get("last_spin_player") or ""
                 spin_timestamp = room.get("spin_timestamp")
-                current_round = room.get("current_round") or 1
-                game_phase = room.get("game_phase") or "playing"
-                round_phrases = text_to_list(room.get("round_phrases"))
-                used_phrases = text_to_list(room.get("used_phrases"))
+
+                # Round tracking in session_state (not database)
+                if "current_round" not in st.session_state:
+                    st.session_state.current_round = 1
+                if "used_phrases" not in st.session_state:
+                    st.session_state.used_phrases = [phrase]
+                if "game_phase" not in st.session_state:
+                    st.session_state.game_phase = "playing"
+
+                current_round = st.session_state.current_round
+                game_phase = st.session_state.game_phase
+                used_phrases = st.session_state.used_phrases
 
                 spin_finished = is_spin_finished(room)
 
@@ -883,11 +810,38 @@ if st.session_state.screen in ["lobby", "game"]:
                     if st.session_state.is_host:
                         if current_round >= TOTAL_ROUNDS:
                             if st.button("🏆 Zakończ grę i pokaż wyniki", type="primary", use_container_width=True):
-                                show_game_over(supabase, st.session_state.created_room_id)
+                                st.session_state.game_phase = "game_over"
                                 st.rerun()
                         else:
                             if st.button("➡️ Następna runda", type="primary", use_container_width=True):
-                                next_round(supabase, st.session_state.created_room_id, used_phrases, current_round)
+                                # Pick new phrase
+                                available = [p for p in PHRASES if normalize_phrase(p["phrase"]) not in used_phrases]
+                                if not available:
+                                    available = PHRASES
+                                selected = random.choice(available)
+                                new_phrase = normalize_phrase(selected["phrase"])
+
+                                # Update database with new round
+                                (
+                                    supabase.table("game_rooms")
+                                    .update({
+                                        "current_phrase": new_phrase,
+                                        "current_category": selected["category"],
+                                        "guessed_letters": [],
+                                        "current_turn_index": 0,
+                                        "current_spin_value": 0,
+                                        "spin_status": "idle",
+                                        "last_spin_value": 0,
+                                        "last_spin_player": None,
+                                        "spin_timestamp": None,
+                                    })
+                                    .eq("id", st.session_state.created_room_id)
+                                    .execute()
+                                )
+
+                                st.session_state.current_round = current_round + 1
+                                st.session_state.used_phrases = used_phrases + [new_phrase]
+                                st.session_state.game_phase = "playing"
                                 st.rerun()
                     else:
                         if current_round >= TOTAL_ROUNDS:
@@ -936,6 +890,10 @@ if st.session_state.screen in ["lobby", "game"]:
                             st.write(f"{i}. {player['nickname']}: {player['total_score']} pkt")
 
                     if st.button("🔄 Nowa gra", use_container_width=True):
+                        # Reset session state
+                        for key in ["current_round", "used_phrases", "game_phase"]:
+                            if key in st.session_state:
+                                del st.session_state[key]
                         st.session_state.screen = "home"
                         st.rerun()
 
@@ -984,23 +942,9 @@ if st.session_state.screen in ["lobby", "game"]:
                     <script>if(window.playSound) window.playSound('phrase_win');</script>
                     """, height=0)
 
-                    # Save round scores
-                    for player in players:
-                        current_total = player.get("total_score", 0)
-                        round_scores_raw = player.get("round_scores")
-                        round_scores = text_to_list(round_scores_raw)
-                        if len(round_scores) < current_round:
-                            round_scores.append(str(current_total))
-                            try:
-                                supabase.table("game_players").update({
-                                    "round_scores": list_to_text(round_scores),
-                                }).eq("id", player["id"]).execute()
-                            except Exception:
-                                pass
-
                     if st.session_state.is_host:
                         if st.button("📊 Pokaż podsumowanie rundy", type="primary", use_container_width=True):
-                            show_round_summary(supabase, st.session_state.created_room_id)
+                            st.session_state.game_phase = "round_summary"
                             st.rerun()
                     else:
                         st.info("Czekasz na podsumowanie rundy...")
@@ -1072,7 +1016,7 @@ if st.session_state.screen in ["lobby", "game"]:
                                 (
                                     supabase.table("game_rooms")
                                     .update({
-                                        "guessed_letters": list_to_text(new_guessed),
+                                        "guessed_letters": new_guessed,
                                         "spin_status": "idle",
                                         "current_spin_value": 0,
                                         "spin_timestamp": None,
@@ -1116,7 +1060,7 @@ if st.session_state.screen in ["lobby", "game"]:
                                 (
                                     supabase.table("game_rooms")
                                     .update({
-                                        "guessed_letters": list_to_text(all_letters),
+                                        "guessed_letters": all_letters,
                                         "spin_status": "idle",
                                         "spin_timestamp": None,
                                     })
@@ -1130,6 +1074,10 @@ if st.session_state.screen in ["lobby", "game"]:
                                 st.rerun()
 
                 if st.button("Wróć do strony głównej"):
+                    # Clean up session state
+                    for key in ["current_round", "used_phrases", "game_phase"]:
+                        if key in st.session_state:
+                            del st.session_state[key]
                     st.session_state.screen = "home"
                     st.rerun()
 
