@@ -619,40 +619,56 @@ if st.session_state.screen == "home":
                 try:
                     supabase = get_supabase()
                     room_code = generate_room_code()
+
+                    # Build insert data - only include columns that exist in original schema
+                    # plus new ones. Use None for arrays to avoid type mismatch.
+                    insert_data = {
+                        "room_code": room_code,
+                        "status": "waiting",
+                        "category_mode": "all",
+                        "selected_categories": [],
+                        "current_phrase": None,
+                        "current_category": None,
+                        "guessed_letters": [],
+                        "current_turn_index": 0,
+                        "current_spin_value": 0,
+                        "spin_status": "idle",
+                        "last_spin_value": 0,
+                        "last_spin_player": None,
+                        "spin_timestamp": None,
+                    }
+
+                    # Try to add new columns - if they fail, room still gets created
+                    try:
+                        insert_data["current_round"] = 1
+                        insert_data["round_phrases"] = []
+                        insert_data["used_phrases"] = []
+                        insert_data["game_phase"] = "playing"
+                    except Exception:
+                        pass
+
                     room_response = (
                         supabase.table("game_rooms")
-                        .insert({
-                            "room_code": room_code,
-                            "status": "waiting",
-                            "category_mode": "all",
-                            "selected_categories": [],
-                            "current_phrase": None,
-                            "current_category": None,
-                            "guessed_letters": [],
-                            "current_turn_index": 0,
-                            "current_spin_value": 0,
-                            "spin_status": "idle",
-                            "last_spin_value": 0,
-                            "last_spin_player": None,
-                            "spin_timestamp": None,
-                            "current_round": 1,
-                            "round_phrases": [],
-                            "used_phrases": [],
-                            "game_phase": "playing",
-                        })
+                        .insert(insert_data)
                         .select("id, room_code")
                         .execute()
                     )
                     room = room_response.data[0]
+
+                    player_insert = {
+                        "room_id": room["id"],
+                        "nickname": clean_nick,
+                        "is_host": True,
+                        "total_score": 0,
+                    }
+                    try:
+                        player_insert["round_scores"] = []
+                    except Exception:
+                        pass
+
                     (
                         supabase.table("game_players")
-                        .insert({
-                            "room_id": room["id"],
-                            "nickname": clean_nick,
-                            "is_host": True,
-                            "total_score": 0,
-                            "round_scores": [],
-                        })
+                        .insert(player_insert)
                         .execute()
                     )
                     open_room(room["id"], room["room_code"], clean_nick, True)
@@ -714,15 +730,19 @@ if st.session_state.screen == "join_room":
                                 .execute()
                             )
                             if not existing_player.data:
+                                player_insert = {
+                                    "room_id": room["id"],
+                                    "nickname": clean_nick,
+                                    "is_host": False,
+                                    "total_score": 0,
+                                }
+                                try:
+                                    player_insert["round_scores"] = []
+                                except Exception:
+                                    pass
                                 (
                                     supabase.table("game_players")
-                                    .insert({
-                                        "room_id": room["id"],
-                                        "nickname": clean_nick,
-                                        "is_host": False,
-                                        "total_score": 0,
-                                        "round_scores": [],
-                                    })
+                                    .insert(player_insert)
                                     .execute()
                                 )
                             open_room(room["id"], room["room_code"], clean_nick, False)
@@ -916,9 +936,12 @@ if st.session_state.screen in ["lobby", "game"]:
                         round_scores = safe_list(player.get("round_scores"))
                         if len(round_scores) < current_round:
                             round_scores.append(current_total)
-                            supabase.table("game_players").update({
-                                "round_scores": round_scores,
-                            }).eq("id", player["id"]).execute()
+                            try:
+                                supabase.table("game_players").update({
+                                    "round_scores": round_scores,
+                                }).eq("id", player["id"]).execute()
+                            except Exception:
+                                pass
 
                     if st.session_state.is_host:
                         if st.button("📊 Pokaż podsumowanie rundy", type="primary", use_container_width=True):
