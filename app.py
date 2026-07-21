@@ -609,7 +609,7 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
     </script>
     <script>
     // Initialize audio on any click anywhere
-    document.addEventListener('click', function() {
+    document.addEventListener('click', function() {{
         if (window.initAudio) window.initAudio();
     }}, {{once: true}});
     </script>
