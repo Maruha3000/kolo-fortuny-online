@@ -1,4 +1,3 @@
-
 import random
 import string
 import streamlit as st
@@ -108,6 +107,10 @@ def safe_list(value):
         return []
     if isinstance(value, list):
         return value
+    if isinstance(value, str):
+        if value.strip() == "":
+            return []
+        return [item.strip() for item in value.split(",") if item.strip()]
     return []
 
 
@@ -163,7 +166,6 @@ def start_game_for_room(supabase, room_id):
     selected = random.choice(PHRASES)
     phrase = normalize_phrase(selected["phrase"])
 
-    # Only update columns that existed in original working version
     update_data = {
         "status": "playing",
         "current_phrase": phrase,
@@ -184,7 +186,6 @@ def start_game_for_room(supabase, room_id):
         .execute()
     )
 
-    # Reset scores
     players = supabase.table("game_players").select("id").eq("room_id", room_id).execute()
     for p in players.data:
         supabase.table("game_players").update({"total_score": 0}).eq("id", p["id"]).execute()
@@ -271,7 +272,6 @@ def is_spin_finished(room):
 def get_sounds_js():
     return """
     <script>
-    // Initialize audio context on first user interaction
     window.audioCtx = null;
     window.audioInitialized = false;
 
@@ -290,17 +290,12 @@ def get_sounds_js():
         if (!window.audioCtx) return;
 
         const ctx = window.audioCtx;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
 
         if (type === 'spin') {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
             osc.type = 'sine';
             osc.frequency.setValueAtTime(200, ctx.currentTime);
             osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.3);
@@ -309,6 +304,10 @@ def get_sounds_js():
             osc.start(ctx.currentTime);
             osc.stop(ctx.currentTime + 0.3);
         } else if (type === 'tick') {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
             osc.type = 'square';
             osc.frequency.setValueAtTime(800, ctx.currentTime);
             gain.gain.setValueAtTime(0.08, ctx.currentTime);
@@ -316,7 +315,6 @@ def get_sounds_js():
             osc.start(ctx.currentTime);
             osc.stop(ctx.currentTime + 0.05);
         } else if (type === 'win') {
-            osc.type = 'sine';
             const notes = [523, 659, 784, 1047];
             notes.forEach((freq, i) => {
                 const o = ctx.createOscillator();
@@ -329,8 +327,11 @@ def get_sounds_js():
                 o.start(ctx.currentTime + i * 0.15);
                 o.stop(ctx.currentTime + i * 0.15 + 0.3);
             });
-            return;
         } else if (type === 'hit') {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
             osc.type = 'sine';
             osc.frequency.setValueAtTime(880, ctx.currentTime);
             osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.2);
@@ -339,6 +340,10 @@ def get_sounds_js():
             osc.start(ctx.currentTime);
             osc.stop(ctx.currentTime + 0.4);
         } else if (type === 'miss') {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
             osc.type = 'sawtooth';
             osc.frequency.setValueAtTime(150, ctx.currentTime);
             gain.gain.setValueAtTime(0.1, ctx.currentTime);
@@ -346,7 +351,6 @@ def get_sounds_js():
             osc.start(ctx.currentTime);
             osc.stop(ctx.currentTime + 0.3);
         } else if (type === 'phrase_win') {
-            osc.type = 'sine';
             const notes = [392, 523, 659, 784, 1047, 1319];
             notes.forEach((freq, i) => {
                 const o = ctx.createOscillator();
@@ -359,9 +363,7 @@ def get_sounds_js():
                 o.start(ctx.currentTime + i * 0.1);
                 o.stop(ctx.currentTime + i * 0.1 + 0.25);
             });
-            return;
         } else if (type === 'game_over') {
-            osc.type = 'sine';
             const notes = [523, 587, 659, 784, 880, 1047, 1175, 1319];
             notes.forEach((freq, i) => {
                 const o = ctx.createOscillator();
@@ -374,8 +376,11 @@ def get_sounds_js():
                 o.start(ctx.currentTime + i * 0.12);
                 o.stop(ctx.currentTime + i * 0.12 + 0.4);
             });
-            return;
         } else if (type === 'new_round') {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
             osc.type = 'triangle';
             osc.frequency.setValueAtTime(659, ctx.currentTime);
             osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
@@ -383,11 +388,6 @@ def get_sounds_js():
             gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
             osc.start(ctx.currentTime);
             osc.stop(ctx.currentTime + 0.5);
-        }
-
-        if (type !== 'win' && type !== 'phrase_win' && type !== 'game_over' && type !== 'new_round') {
-            osc.start(ctx.currentTime);
-            osc.stop(ctx.currentTime + 0.3);
         }
     };
     </script>
@@ -608,7 +608,6 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
     }})();
     </script>
     <script>
-    // Initialize audio on any click anywhere
     document.addEventListener('click', function() {{
         if (window.initAudio) window.initAudio();
     }}, {{once: true}});
@@ -624,7 +623,6 @@ st.caption("Graj online ze znajomymi w jednym pokoju.")
 
 st.components.v1.html(get_sounds_js(), height=0)
 
-# Sound enable button - browsers require user interaction before playing audio
 if "audio_enabled" not in st.session_state:
     st.session_state.audio_enabled = False
 
@@ -647,8 +645,6 @@ if st.session_state.screen == "home":
                     supabase = get_supabase()
                     room_code = generate_room_code()
 
-                    # EXACT same insert as original working version
-                    # Only columns that were in the original app.py
                     room_response = (
                         supabase.table("game_rooms")
                         .insert({
@@ -768,7 +764,6 @@ if st.session_state.screen in ["lobby", "game"]:
             st.error("Nie znaleziono pokoju.")
         else:
             if room["status"] == "waiting":
-                # Sound toggle in lobby
                 if not st.session_state.audio_enabled:
                     if st.button("🔊 Włącz dźwięki", use_container_width=True):
                         st.session_state.audio_enabled = True
@@ -815,7 +810,6 @@ if st.session_state.screen in ["lobby", "game"]:
                 last_spin_player = room.get("last_spin_player") or ""
                 spin_timestamp = room.get("spin_timestamp")
 
-                # Round tracking in session_state (not database)
                 if "current_round" not in st.session_state:
                     st.session_state.current_round = 1
                 if "used_phrases" not in st.session_state:
@@ -858,14 +852,12 @@ if st.session_state.screen in ["lobby", "game"]:
                                 st.rerun()
                         else:
                             if st.button("➡️ Następna runda", type="primary", use_container_width=True):
-                                # Pick new phrase
                                 available = [p for p in PHRASES if normalize_phrase(p["phrase"]) not in used_phrases]
                                 if not available:
                                     available = PHRASES
                                 selected = random.choice(available)
                                 new_phrase = normalize_phrase(selected["phrase"])
 
-                                # Update database with new round
                                 (
                                     supabase.table("game_rooms")
                                     .update({
@@ -934,7 +926,6 @@ if st.session_state.screen in ["lobby", "game"]:
                             st.write(f"{i}. {player['nickname']}: {player['total_score']} pkt")
 
                     if st.button("🔄 Nowa gra", use_container_width=True):
-                        # Reset session state
                         for key in ["current_round", "used_phrases", "game_phase"]:
                             if key in st.session_state:
                                 del st.session_state[key]
@@ -952,8 +943,6 @@ if st.session_state.screen in ["lobby", "game"]:
                 if current_player:
                     st.info(f"Tura gracza: {current_player['nickname']}")
 
-                # --- ANIMOWANE KOŁO ---
-                import math
                 wheel_html = render_wheel(
                     spin_status=spin_status,
                     spin_value=last_spin_value,
@@ -963,7 +952,6 @@ if st.session_state.screen in ["lobby", "game"]:
                 )
                 st.components.v1.html(wheel_html, height=340)
 
-                # --- STATUS KOŁA ---
                 if spin_status == "spinning":
                     if spin_finished:
                         st.success(f"🎯 Koło zatrzymało się na: **{last_spin_value} pkt** (kręcił: {last_spin_player})")
@@ -1032,7 +1020,6 @@ if st.session_state.screen in ["lobby", "game"]:
                             else:
                                 st.warning("To nie Twoja tura.")
 
-                    # --- ZGADYWANIE ---
                     can_guess = my_turn and (spin_status == "finished" or (spin_status == "spinning" and spin_finished))
 
                     if can_guess:
@@ -1119,7 +1106,6 @@ if st.session_state.screen in ["lobby", "game"]:
                                 st.rerun()
 
                 if st.button("Wróć do strony głównej"):
-                    # Clean up session state
                     for key in ["current_round", "used_phrases", "game_phase"]:
                         if key in st.session_state:
                             del st.session_state[key]
