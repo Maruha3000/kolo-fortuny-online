@@ -4,6 +4,7 @@ import string
 import streamlit as st
 from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
+from datetime import datetime, timezone
 
 st.set_page_config(page_title="Koło Fortuny Online", page_icon="🎡", layout="centered")
 
@@ -26,6 +27,7 @@ PHRASES = [
 ]
 
 WHEEL_VALUES = [100, 150, 200, 250, 300, 400, 500, 700]
+SPIN_DURATION_SECONDS = 3
 
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
@@ -115,6 +117,7 @@ def start_game_for_room(supabase, room_id):
             "spin_status": "idle",
             "last_spin_value": 0,
             "last_spin_player": None,
+            "spin_timestamp": None,
         })
         .eq("id", room_id)
         .execute()
@@ -128,6 +131,7 @@ def next_turn(supabase, room_id, current_turn_index):
             "current_turn_index": current_turn_index + 1,
             "current_spin_value": 0,
             "spin_status": "idle",
+            "spin_timestamp": None,
         })
         .eq("id", room_id)
         .execute()
@@ -136,6 +140,7 @@ def next_turn(supabase, room_id, current_turn_index):
 
 def spin_wheel(supabase, room_id, player_nickname):
     spin_value = random.choice(WHEEL_VALUES)
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     (
         supabase.table("game_rooms")
@@ -144,6 +149,7 @@ def spin_wheel(supabase, room_id, player_nickname):
             "spin_status": "spinning",
             "last_spin_value": spin_value,
             "last_spin_player": player_nickname,
+            "spin_timestamp": now_iso,
         })
         .eq("id", room_id)
         .execute()
@@ -152,9 +158,24 @@ def spin_wheel(supabase, room_id, player_nickname):
     return spin_value
 
 
+def is_spin_finished(room):
+    """Check if 3 seconds have passed since spin started."""
+    spin_ts = room.get("spin_timestamp")
+    if not spin_ts:
+        return False
+    try:
+        # Parse ISO timestamp
+        ts = datetime.fromisoformat(spin_ts.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        elapsed = (now - ts).total_seconds()
+        return elapsed >= SPIN_DURATION_SECONDS
+    except Exception:
+        return False
+
+
 # ========== KOMPONENT HTML+JS: ANIMOWANE KOŁO ==========
 
-def render_wheel(spin_status, spin_value, player_name, is_my_turn):
+def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestamp):
     colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"]
     segments = len(WHEEL_VALUES)
     angle_per_segment = 360 / segments
@@ -173,15 +194,10 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn):
     except ValueError:
         target_idx = 0
 
-    # The pointer is at top (0 deg). To land on target_idx, we need the center
-    # of that segment to point upward. Center of segment = target_idx * angle_per_segment + angle_per_segment/2
     target_center_angle = target_idx * angle_per_segment + angle_per_segment / 2
-    # Pointer is fixed at 0 (top), so rotate wheel by (360 - target_center_angle) + full spins
     final_rotation = (360 - target_center_angle) % 360
-    # Add 5 full spins for effect
     spin_degrees = 5 * 360 + final_rotation
 
-    # Determine animation class / state
     if spin_status == "spinning":
         anim_class = "wheel-spinning"
         wheel_style = f"transform: rotate({spin_degrees}deg); transition: transform 3s cubic-bezier(0.25, 0.1, 0.25, 1);"
@@ -278,7 +294,6 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn):
             <div class="wheel-center">🎡</div>
     """
 
-    # Place value labels on the wheel
     for i, val in enumerate(WHEEL_VALUES):
         mid_angle = i * angle_per_segment + angle_per_segment / 2
         label_style = f"transform: translate(-50%, -50%) rotate({mid_angle}deg) translateY(-75px);"
@@ -296,13 +311,20 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn):
     (function() {{
         const overlay = document.getElementById('spinOverlay');
         const status = "{spin_status}";
+        const spinTs = "{spin_timestamp or ''}";
 
         if (status === "spinning") {{
             overlay.style.display = "none";
+            // Always show animation for 3 seconds from the timestamp
+            let elapsed = 0;
+            if (spinTs) {{
+                elapsed = (Date.now() - new Date(spinTs).getTime()) / 1000;
+            }}
+            let remaining = Math.max(0, 3100 - elapsed * 1000);
             setTimeout(() => {{
                 overlay.style.display = "block";
                 overlay.innerHTML = '<div>🎯 {spin_value} pkt</div><div style="font-size:13px;margin-top:4px;opacity:0.85;">{player_name or ""}</div>';
-            }}, 3100);
+            }}, remaining);
         }} else if (status === "finished") {{
             overlay.style.display = "block";
             overlay.innerHTML = '<div>🎯 {spin_value} pkt</div><div style="font-size:13px;margin-top:4px;opacity:0.85;">{player_name or ""}</div>';
@@ -353,6 +375,7 @@ if st.session_state.screen == "home":
                             "spin_status": "idle",
                             "last_spin_value": 0,
                             "last_spin_player": None,
+                            "spin_timestamp": None,
                         })
                         .select("id, room_code")
                         .execute()
@@ -488,6 +511,10 @@ if st.session_state.screen in ["lobby", "game"]:
                 spin_status = room.get("spin_status") or "idle"
                 last_spin_value = room.get("last_spin_value") or 0
                 last_spin_player = room.get("last_spin_player") or ""
+                spin_timestamp = room.get("spin_timestamp")
+
+                # Check if spin animation should be considered finished
+                spin_finished = is_spin_finished(room)
 
                 masked = mask_phrase(phrase, guessed_letters)
                 current_player = get_current_player(players, current_turn_index)
@@ -511,12 +538,16 @@ if st.session_state.screen in ["lobby", "game"]:
                     spin_value=last_spin_value,
                     player_name=last_spin_player,
                     is_my_turn=my_turn,
+                    spin_timestamp=spin_timestamp,
                 )
                 st.components.v1.html(wheel_html, height=340)
 
-                # --- STATUS KOŁA (tekstowy dla pewności) ---
+                # --- STATUS KOŁA ---
                 if spin_status == "spinning":
-                    st.write(f"🔄 **{last_spin_player}** kręci kołem...")
+                    if spin_finished:
+                        st.success(f"🎯 Koło zatrzymało się na: **{last_spin_value} pkt** (kręcił: {last_spin_player})")
+                    else:
+                        st.write(f"🔄 **{last_spin_player}** kręci kołem...")
                 elif spin_status == "finished":
                     st.success(f"🎯 Koło zatrzymało się na: **{last_spin_value} pkt** (kręcił: {last_spin_player})")
 
@@ -541,7 +572,19 @@ if st.session_state.screen in ["lobby", "game"]:
                                     value = spin_wheel(supabase, st.session_state.created_room_id, st.session_state.nickname)
                                     st.rerun()
                             elif spin_status == "spinning":
-                                st.info("Koło się kręci... poczekaj!")
+                                if spin_finished:
+                                    # Spin finished on server side, allow guessing
+                                    if st.button("Zgaduj!", type="primary", use_container_width=True):
+                                        # Update status to finished so forms show
+                                        (
+                                            supabase.table("game_rooms")
+                                            .update({"spin_status": "finished"})
+                                            .eq("id", st.session_state.created_room_id)
+                                            .execute()
+                                        )
+                                        st.rerun()
+                                else:
+                                    st.info("Koło się kręci... poczekaj!")
                             else:  # finished
                                 st.success(f"Koło pokazuje: {current_spin_value} pkt")
                         else:
@@ -551,7 +594,19 @@ if st.session_state.screen in ["lobby", "game"]:
                                 st.warning("To nie Twoja tura.")
 
                     # --- ZGADYWANIE LITERY / HASŁA ---
-                    if my_turn and spin_status == "finished":
+                    # Show guessing forms when: my turn AND (spin is finished OR spin has timed out)
+                    can_guess = my_turn and (spin_status == "finished" or (spin_status == "spinning" and spin_finished))
+
+                    if can_guess:
+                        # If spin just timed out but status is still "spinning", update it
+                        if spin_status == "spinning" and spin_finished:
+                            (
+                                supabase.table("game_rooms")
+                                .update({"spin_status": "finished"})
+                                .eq("id", st.session_state.created_room_id)
+                                .execute()
+                            )
+
                         with st.form("guess_form"):
                             letter_input = st.text_input("Podaj literę", max_chars=1, key="guess_letter")
                             submitted_letter = st.form_submit_button("Zgadnij literę")
@@ -572,6 +627,7 @@ if st.session_state.screen in ["lobby", "game"]:
                                         "guessed_letters": new_guessed,
                                         "spin_status": "idle",
                                         "current_spin_value": 0,
+                                        "spin_timestamp": None,
                                     })
                                     .eq("id", st.session_state.created_room_id)
                                     .execute()
@@ -608,6 +664,7 @@ if st.session_state.screen in ["lobby", "game"]:
                                     .update({
                                         "guessed_letters": all_letters,
                                         "spin_status": "idle",
+                                        "spin_timestamp": None,
                                     })
                                     .eq("id", st.session_state.created_room_id)
                                     .execute()
