@@ -1,3 +1,4 @@
+
 import random
 import string
 import streamlit as st
@@ -18,14 +19,13 @@ DEFAULTS = {
 PHRASES = [
     {"category": "Filmy", "phrase": "KRÓL LEW"},
     {"category": "Muzyka", "phrase": "MICHAEL JACKSON"},
-    {"category": "Powiedania", "phrase": "LEPSZY WRÓBEL W GARŚCI"},
+    {"category": "Powiedzenia", "phrase": "LEPSZY WRÓBEL W GARŚCI"},
     {"category": "Sport", "phrase": "ROBERT LEWANDOWSKI"},
     {"category": "Podróże", "phrase": "WAKACJE NAD MORZEM"},
     {"category": "Jedzenie", "phrase": "PIZZA Z SEREM"},
 ]
 
 WHEEL_VALUES = [100, 150, 200, 250, 300, 400, 500, 700]
-
 
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
@@ -269,7 +269,7 @@ if st.session_state.screen == "join_room":
                                     supabase.table("game_players")
                                     .insert({
                                         "room_id": room["id"],
-                                        "nickname": clean_nick",
+                                        "nickname": clean_nick,
                                         "is_host": False,
                                         "total_score": 0
                                     })
@@ -436,13 +436,13 @@ if st.session_state.screen in ["lobby", "game"]:
                             if not clean_guess:
                                 st.error("Wpisz hasło.")
                             elif clean_guess == phrase:
-                                # Odgadnięte hasło – oznaczamy jako zakończone
                                 st.success(f"Brawo! Odgadłeś hasło: {phrase}")
 
-                                # Można tu później dodać bonus punktowy za hasło
+                                # odsłaniamy całe hasło dla wszystkich
+                                all_letters = list(set(list(phrase.replace(" ", ""))))
                                 (
                                     supabase.table("game_rooms")
-                                    .update({"guessed_letters": list(set(list(phrase.replace(' ', ''))))})
+                                    .update({"guessed_letters": all_letters})
                                     .eq("id", st.session_state.created_room_id)
                                     .execute()
                                 )
