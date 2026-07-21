@@ -1,5 +1,6 @@
 import random
 import string
+import json
 import streamlit as st
 from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
@@ -90,7 +91,6 @@ def normalize_phrase(text):
 def mask_phrase(phrase, guessed_letters):
     guessed_set = set(guessed_letters or [])
     visible = []
-
     for char in phrase:
         if char == " ":
             visible.append("  ")
@@ -98,19 +98,32 @@ def mask_phrase(phrase, guessed_letters):
             visible.append(char)
         else:
             visible.append("_")
-
     return " ".join(visible)
 
 
 def safe_list(value):
+    """Bezpiecznie konwertuje cokolwiek z bazy na listę stringów."""
     if value is None:
         return []
     if isinstance(value, list):
-        return value
+        return [str(x).upper().strip() for x in value if x is not None]
     if isinstance(value, str):
-        if value.strip() == "":
+        text = value.strip()
+        if not text or text in ("{}", "[]", ""):
             return []
-        return [item.strip() for item in value.split(",") if item.strip()]
+        # Postgres zwraca czasem {A,B,C}
+        if text.startswith("{") and text.endswith("}"):
+            text = text[1:-1]
+        # JSON: ["A","B"]
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return [str(x).upper().strip() for x in parsed if x is not None]
+            except Exception:
+                pass
+        # Po przecinku: A,B,C
+        return [item.strip().upper() for item in text.split(",") if item.strip()]
     return []
 
 
@@ -142,7 +155,6 @@ def get_room_and_players(supabase, room_id):
         .limit(1)
         .execute()
     )
-
     players_response = (
         supabase.table("game_players")
         .select("id, nickname, is_host, total_score, round_scores")
@@ -150,7 +162,6 @@ def get_room_and_players(supabase, room_id):
         .order("is_host", desc=True)
         .execute()
     )
-
     room = room_response.data[0] if room_response.data else None
     players = players_response.data if players_response.data else []
     return room, players
@@ -165,7 +176,6 @@ def get_current_player(players, turn_index):
 def start_game_for_room(supabase, room_id):
     selected = random.choice(PHRASES)
     phrase = normalize_phrase(selected["phrase"])
-
     update_data = {
         "status": "playing",
         "current_phrase": phrase,
@@ -178,79 +188,31 @@ def start_game_for_room(supabase, room_id):
         "last_spin_player": None,
         "spin_timestamp": None,
     }
-
-    (
-        supabase.table("game_rooms")
-        .update(update_data)
-        .eq("id", room_id)
-        .execute()
-    )
-
+    supabase.table("game_rooms").update(update_data).eq("id", room_id).execute()
     players = supabase.table("game_players").select("id").eq("room_id", room_id).execute()
     for p in players.data:
         supabase.table("game_players").update({"total_score": 0}).eq("id", p["id"]).execute()
 
 
-def next_round(supabase, room_id, used_phrases, current_round):
-    available = [p for p in PHRASES if normalize_phrase(p["phrase"]) not in used_phrases]
-    if not available:
-        available = PHRASES
-
-    selected = random.choice(available)
-    phrase = normalize_phrase(selected["phrase"])
-    new_used = used_phrases + [phrase]
-
-    update_data = {
-        "current_phrase": phrase,
-        "current_category": selected["category"],
-        "guessed_letters": [],
-        "current_turn_index": 0,
+def next_turn(supabase, room_id, current_turn_index):
+    supabase.table("game_rooms").update({
+        "current_turn_index": current_turn_index + 1,
         "current_spin_value": 0,
         "spin_status": "idle",
-        "last_spin_value": 0,
-        "last_spin_player": None,
         "spin_timestamp": None,
-    }
-
-    (
-        supabase.table("game_rooms")
-        .update(update_data)
-        .eq("id", room_id)
-        .execute()
-    )
-
-
-def next_turn(supabase, room_id, current_turn_index):
-    (
-        supabase.table("game_rooms")
-        .update({
-            "current_turn_index": current_turn_index + 1,
-            "current_spin_value": 0,
-            "spin_status": "idle",
-            "spin_timestamp": None,
-        })
-        .eq("id", room_id)
-        .execute()
-    )
+    }).eq("id", room_id).execute()
 
 
 def spin_wheel(supabase, room_id, player_nickname):
     spin_value = random.choice(WHEEL_VALUES)
     now_iso = datetime.now(timezone.utc).isoformat()
-
-    (
-        supabase.table("game_rooms")
-        .update({
-            "current_spin_value": spin_value,
-            "spin_status": "spinning",
-            "last_spin_value": spin_value,
-            "last_spin_player": player_nickname,
-            "spin_timestamp": now_iso,
-        })
-        .eq("id", room_id)
-        .execute()
-    )
-
+    supabase.table("game_rooms").update({
+        "current_spin_value": spin_value,
+        "spin_status": "spinning",
+        "last_spin_value": spin_value,
+        "last_spin_player": player_nickname,
+        "spin_timestamp": now_iso,
+    }).eq("id", room_id).execute()
     return spin_value
 
 
@@ -267,7 +229,7 @@ def is_spin_finished(room):
         return False
 
 
-# ========== DŹWIĘKI JS (Web Audio API) ==========
+# ========== DŹWIĘKI JS ==========
 
 def get_sounds_js():
     return """
@@ -288,7 +250,6 @@ def get_sounds_js():
     window.playSound = function(type) {
         window.initAudio();
         if (!window.audioCtx) return;
-
         const ctx = window.audioCtx;
 
         if (type === 'spin') {
@@ -394,7 +355,7 @@ def get_sounds_js():
     """
 
 
-# ========== KONFETTI ANIMACJA ==========
+# ========== KONFETTI ==========
 
 def get_confetti_html():
     return """
@@ -439,7 +400,7 @@ def get_confetti_html():
     """
 
 
-# ========== ANIMOWANE KOŁO ==========
+# ========== KOŁO ==========
 
 def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestamp):
     colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"]
@@ -616,7 +577,7 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
     return html
 
 
-# ========== STRONA GŁÓWNA ==========
+# ========== UI ==========
 
 st.title("🎡 Koło Fortuny Online")
 st.caption("Graj online ze znajomymi w jednym pokoju.")
@@ -632,9 +593,7 @@ if st.session_state.screen == "home":
         value=st.session_state.nickname,
         placeholder="Wpisz nick, np. Artur"
     )
-
     col1, col2 = st.columns(2)
-
     with col1:
         if st.button("Utwórz pokój", use_container_width=True):
             clean_nick = nickname.strip()
@@ -644,7 +603,6 @@ if st.session_state.screen == "home":
                 try:
                     supabase = get_supabase()
                     room_code = generate_room_code()
-
                     room_response = (
                         supabase.table("game_rooms")
                         .insert({
@@ -666,21 +624,15 @@ if st.session_state.screen == "home":
                         .execute()
                     )
                     room = room_response.data[0]
-
-                    (
-                        supabase.table("game_players")
-                        .insert({
-                            "room_id": room["id"],
-                            "nickname": clean_nick,
-                            "is_host": True,
-                            "total_score": 0,
-                        })
-                        .execute()
-                    )
+                    supabase.table("game_players").insert({
+                        "room_id": room["id"],
+                        "nickname": clean_nick,
+                        "is_host": True,
+                        "total_score": 0,
+                    }).execute()
                     open_room(room["id"], room["room_code"], clean_nick, True)
                 except Exception as e:
                     st.error(f"Nie udało się utworzyć pokoju: {e}")
-
     with col2:
         if st.button("Dołącz do pokoju", use_container_width=True):
             clean_nick = nickname.strip()
@@ -692,18 +644,14 @@ if st.session_state.screen == "home":
                 st.rerun()
 
 
-# ========== DOŁĄCZANIE DO POKOJU ==========
-
 if st.session_state.screen == "join_room":
     st.subheader("Dołączanie do pokoju")
     room_code_input = st.text_input("Kod pokoju", placeholder="Np. ABC123")
     col_back, col_join = st.columns(2)
-
     with col_back:
         if st.button("Wróć", use_container_width=True):
             st.session_state.screen = "home"
             st.rerun()
-
     with col_join:
         if st.button("Dołącz", type="primary", use_container_width=True):
             clean_nick = st.session_state.nickname.strip()
@@ -736,22 +684,18 @@ if st.session_state.screen == "join_room":
                                 .execute()
                             )
                             if not existing_player.data:
-                                (
-                                    supabase.table("game_players")
-                                    .insert({
-                                        "room_id": room["id"],
-                                        "nickname": clean_nick,
-                                        "is_host": False,
-                                        "total_score": 0,
-                                    })
-                                    .execute()
-                                )
+                                supabase.table("game_players").insert({
+                                    "room_id": room["id"],
+                                    "nickname": clean_nick,
+                                    "is_host": False,
+                                    "total_score": 0,
+                                }).execute()
                             open_room(room["id"], room["room_code"], clean_nick, False)
                 except Exception as e:
                     st.error(f"Nie udało się dołączyć do pokoju: {e}")
 
 
-# ========== POCZEKALNIA / GRA ==========
+# ========== GRA ==========
 
 if st.session_state.screen in ["lobby", "game"]:
     st_autorefresh(interval=2000, key="auto_refresh", debounce=True)
@@ -767,9 +711,7 @@ if st.session_state.screen in ["lobby", "game"]:
                 if not st.session_state.audio_enabled:
                     if st.button("🔊 Włącz dźwięki", use_container_width=True):
                         st.session_state.audio_enabled = True
-                        st.components.v1.html("""
-                        <script>window.initAudio();</script>
-                        """, height=0)
+                        st.components.v1.html("<script>window.initAudio();</script>", height=0)
                         st.success("Dźwięki włączone! 🎵")
                         st.rerun()
                 else:
@@ -797,7 +739,6 @@ if st.session_state.screen in ["lobby", "game"]:
                         st.info("Czekasz, aż host rozpocznie grę.")
 
             else:
-                # ========== GRA TRWA ==========
                 st.session_state.screen = "game"
 
                 phrase = room.get("current_phrase") or ""
@@ -834,14 +775,11 @@ if st.session_state.screen in ["lobby", "game"]:
                 if game_phase == "round_summary":
                     st.subheader(f"📊 Podsumowanie rundy {current_round}")
                     st.balloons()
-
                     sorted_players = sorted(players, key=lambda p: p.get("total_score", 0), reverse=True)
-
                     st.write("### Wyniki po tej rundzie:")
                     for i, player in enumerate(sorted_players, 1):
                         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
                         st.write(f"{medal} **{player['nickname']}**: {player['total_score']} pkt")
-
                     st.write(f"### Hasło w tej rundzie: `{phrase}`")
                     st.write(f"**Kategoria:** {category}")
 
@@ -857,24 +795,17 @@ if st.session_state.screen in ["lobby", "game"]:
                                     available = PHRASES
                                 selected = random.choice(available)
                                 new_phrase = normalize_phrase(selected["phrase"])
-
-                                (
-                                    supabase.table("game_rooms")
-                                    .update({
-                                        "current_phrase": new_phrase,
-                                        "current_category": selected["category"],
-                                        "guessed_letters": [],
-                                        "current_turn_index": 0,
-                                        "current_spin_value": 0,
-                                        "spin_status": "idle",
-                                        "last_spin_value": 0,
-                                        "last_spin_player": None,
-                                        "spin_timestamp": None,
-                                    })
-                                    .eq("id", st.session_state.created_room_id)
-                                    .execute()
-                                )
-
+                                supabase.table("game_rooms").update({
+                                    "current_phrase": new_phrase,
+                                    "current_category": selected["category"],
+                                    "guessed_letters": [],
+                                    "current_turn_index": 0,
+                                    "current_spin_value": 0,
+                                    "spin_status": "idle",
+                                    "last_spin_value": 0,
+                                    "last_spin_player": None,
+                                    "spin_timestamp": None,
+                                }).eq("id", st.session_state.created_room_id).execute()
                                 st.session_state.current_round = current_round + 1
                                 st.session_state.used_phrases = used_phrases + [new_phrase]
                                 st.session_state.game_phase = "playing"
@@ -888,50 +819,38 @@ if st.session_state.screen in ["lobby", "game"]:
                     if st.button("Wróć do strony głównej"):
                         st.session_state.screen = "home"
                         st.rerun()
-
                     st.stop()
 
-                # ========== KONIEC GRY - PODIUM ==========
+                # ========== KONIEC GRY ==========
                 if game_phase == "game_over":
                     st.components.v1.html(get_confetti_html(), height=0)
-
                     st.subheader("🏆 KONIEC GRY 🏆")
-
                     sorted_players = sorted(players, key=lambda p: p.get("total_score", 0), reverse=True)
-
-                    st.components.v1.html("""
-                    <script>if(window.playSound) window.playSound('game_over');</script>
-                    """, height=0)
-
+                    st.components.v1.html("<script>if(window.playSound) window.playSound('game_over');</script>", height=0)
                     st.write("## 🎉 Podium 🎉")
-
                     cols = st.columns(min(3, len(sorted_players)))
                     podium_colors = ["#FFD700", "#C0C0C0", "#CD7F32"]
                     podium_emojis = ["🥇", "🥈", "🥉"]
-
                     for i, (col, player) in enumerate(zip(cols, sorted_players)):
                         with col:
                             st.markdown(f"""
-                            <div style="text-align:center; padding:20px; background:{podium_colors[i]}; 
+                            <div style="text-align:center; padding:20px; background:{podium_colors[i]};
                             border-radius:15px; margin:10px 0; box-shadow:0 4px 15px rgba(0,0,0,0.2);">
                                 <div style="font-size:40px;">{podium_emojis[i]}</div>
                                 <div style="font-size:20px; font-weight:bold; color:#333;">{player['nickname']}</div>
                                 <div style="font-size:24px; color:#333;">{player['total_score']} pkt</div>
                             </div>
                             """, unsafe_allow_html=True)
-
                     if len(sorted_players) > 3:
                         st.write("### Pozostali gracze:")
                         for i, player in enumerate(sorted_players[3:], 4):
                             st.write(f"{i}. {player['nickname']}: {player['total_score']} pkt")
-
                     if st.button("🔄 Nowa gra", use_container_width=True):
                         for key in ["current_round", "used_phrases", "game_phase"]:
                             if key in st.session_state:
                                 del st.session_state[key]
                         st.session_state.screen = "home"
                         st.rerun()
-
                     st.stop()
 
                 # ========== NORMALNA GRA ==========
@@ -969,46 +888,33 @@ if st.session_state.screen in ["lobby", "game"]:
 
                 if phrase_guessed:
                     st.success(f"🎉 Hasło zostało odgadnięte: {phrase}")
-
-                    st.components.v1.html("""
-                    <script>if(window.playSound) window.playSound('phrase_win');</script>
-                    """, height=0)
-
+                    st.components.v1.html("<script>if(window.playSound) window.playSound('phrase_win');</script>", height=0)
                     if st.session_state.is_host:
                         if st.button("📊 Pokaż podsumowanie rundy", type="primary", use_container_width=True):
                             st.session_state.game_phase = "round_summary"
                             st.rerun()
                     else:
                         st.info("Czekasz na podsumowanie rundy...")
-
                     if st.button("Wróć do strony głównej"):
                         st.session_state.screen = "home"
                         st.rerun()
-
                     st.stop()
                 else:
                     col_refresh, col_spin = st.columns(2)
-
                     with col_refresh:
                         if st.button("Odśwież stan gry", use_container_width=True):
                             st.rerun()
-
                     with col_spin:
                         if my_turn:
                             if spin_status == "idle":
                                 if st.button("Zakręć kołem", type="primary", use_container_width=True):
                                     st.components.v1.html("<script>window.initAudio();</script>", height=0)
-                                    value = spin_wheel(supabase, st.session_state.created_room_id, st.session_state.nickname)
+                                    spin_wheel(supabase, st.session_state.created_room_id, st.session_state.nickname)
                                     st.rerun()
                             elif spin_status == "spinning":
                                 if spin_finished:
                                     if st.button("Zgaduj!", type="primary", use_container_width=True):
-                                        (
-                                            supabase.table("game_rooms")
-                                            .update({"spin_status": "finished"})
-                                            .eq("id", st.session_state.created_room_id)
-                                            .execute()
-                                        )
+                                        supabase.table("game_rooms").update({"spin_status": "finished"}).eq("id", st.session_state.created_room_id).execute()
                                         st.rerun()
                                 else:
                                     st.info("Koło się kręci... poczekaj!")
@@ -1024,12 +930,7 @@ if st.session_state.screen in ["lobby", "game"]:
 
                     if can_guess:
                         if spin_status == "spinning" and spin_finished:
-                            (
-                                supabase.table("game_rooms")
-                                .update({"spin_status": "finished"})
-                                .eq("id", st.session_state.created_room_id)
-                                .execute()
-                            )
+                            supabase.table("game_rooms").update({"spin_status": "finished"}).eq("id", st.session_state.created_room_id).execute()
 
                         with st.form("guess_form"):
                             letter_input = st.text_input("Podaj literę", max_chars=1, key="guess_letter")
@@ -1044,38 +945,23 @@ if st.session_state.screen in ["lobby", "game"]:
                             else:
                                 new_guessed = guessed_letters + [letter]
                                 occurrences = phrase.count(letter)
-
-                                (
-                                    supabase.table("game_rooms")
-                                    .update({
-                                        "guessed_letters": new_guessed,
-                                        "spin_status": "idle",
-                                        "current_spin_value": 0,
-                                        "spin_timestamp": None,
-                                    })
-                                    .eq("id", st.session_state.created_room_id)
-                                    .execute()
-                                )
+                                supabase.table("game_rooms").update({
+                                    "guessed_letters": new_guessed,
+                                    "spin_status": "idle",
+                                    "current_spin_value": 0,
+                                    "spin_timestamp": None,
+                                }).eq("id", st.session_state.created_room_id).execute()
 
                                 if occurrences > 0:
                                     new_score = my_player["total_score"] + (occurrences * current_spin_value)
-                                    (
-                                        supabase.table("game_players")
-                                        .update({"total_score": new_score})
-                                        .eq("id", my_player["id"])
-                                        .execute()
-                                    )
+                                    supabase.table("game_players").update({"total_score": new_score}).eq("id", my_player["id"]).execute()
                                     st.success(f"Trafiona litera: {letter}. Zdobywasz {occurrences * current_spin_value} pkt.")
-                                    st.components.v1.html("""
-                                    <script>if(window.playSound) window.playSound('hit');</script>
-                                    """, height=0)
+                                    st.components.v1.html("<script>if(window.playSound) window.playSound('hit');</script>", height=0)
                                     st.rerun()
                                 else:
                                     next_turn(supabase, st.session_state.created_room_id, current_turn_index)
                                     st.error(f"Brak litery: {letter}. Kolejka przechodzi dalej.")
-                                    st.components.v1.html("""
-                                    <script>if(window.playSound) window.playSound('miss');</script>
-                                    """, height=0)
+                                    st.components.v1.html("<script>if(window.playSound) window.playSound('miss');</script>", height=0)
                                     st.rerun()
 
                         with st.form("guess_phrase_form"):
@@ -1089,16 +975,11 @@ if st.session_state.screen in ["lobby", "game"]:
                             elif clean_guess == phrase:
                                 st.success(f"Brawo! Odgadłeś hasło: {phrase}")
                                 all_letters = list(set(list(phrase.replace(" ", ""))))
-                                (
-                                    supabase.table("game_rooms")
-                                    .update({
-                                        "guessed_letters": all_letters,
-                                        "spin_status": "idle",
-                                        "spin_timestamp": None,
-                                    })
-                                    .eq("id", st.session_state.created_room_id)
-                                    .execute()
-                                )
+                                supabase.table("game_rooms").update({
+                                    "guessed_letters": all_letters,
+                                    "spin_status": "idle",
+                                    "spin_timestamp": None,
+                                }).eq("id", st.session_state.created_room_id).execute()
                                 st.rerun()
                             else:
                                 st.error("Hasło nieprawidłowe. Tracisz kolejkę.")
