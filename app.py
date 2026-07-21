@@ -271,7 +271,29 @@ def is_spin_finished(room):
 def get_sounds_js():
     return """
     <script>
+    // Initialize audio context on first user interaction
+    window.audioCtx = null;
+    window.audioInitialized = false;
+
+    window.initAudio = function() {
+        if (!window.audioInitialized) {
+            window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            window.audioInitialized = true;
+        }
+        if (window.audioCtx && window.audioCtx.state === 'suspended') {
+            window.audioCtx.resume();
+        }
+    };
+
     window.playSound = function(type) {
+        window.initAudio();
+        if (!window.audioCtx) return;
+
+        const ctx = window.audioCtx;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -585,6 +607,12 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
         }}
     }})();
     </script>
+    <script>
+    // Initialize audio on any click anywhere
+    document.addEventListener('click', function() {
+        if (window.initAudio) window.initAudio();
+    }, {once: true});
+    </script>
     """
     return html
 
@@ -594,7 +622,11 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
 st.title("🎡 Koło Fortuny Online")
 st.caption("Graj online ze znajomymi w jednym pokoju.")
 
-st.components.v1.html(get_sounds_js(), height=10)
+st.components.v1.html(get_sounds_js(), height=0)
+
+# Sound enable button - browsers require user interaction before playing audio
+if "audio_enabled" not in st.session_state:
+    st.session_state.audio_enabled = False
 
 if st.session_state.screen == "home":
     nickname = st.text_input(
@@ -736,6 +768,18 @@ if st.session_state.screen in ["lobby", "game"]:
             st.error("Nie znaleziono pokoju.")
         else:
             if room["status"] == "waiting":
+                # Sound toggle in lobby
+                if not st.session_state.audio_enabled:
+                    if st.button("🔊 Włącz dźwięki", use_container_width=True):
+                        st.session_state.audio_enabled = True
+                        st.components.v1.html("""
+                        <script>window.initAudio();</script>
+                        """, height=0)
+                        st.success("Dźwięki włączone! 🎵")
+                        st.rerun()
+                else:
+                    st.write("🔊 Dźwięki włączone")
+
                 st.subheader("Poczekalnia")
                 st.success(f"Jesteś w pokoju: {st.session_state.created_room_code}")
                 st.write(f"**Twój nick:** {st.session_state.nickname}")
@@ -965,6 +1009,7 @@ if st.session_state.screen in ["lobby", "game"]:
                         if my_turn:
                             if spin_status == "idle":
                                 if st.button("Zakręć kołem", type="primary", use_container_width=True):
+                                    st.components.v1.html("<script>window.initAudio();</script>", height=0)
                                     value = spin_wheel(supabase, st.session_state.created_room_id, st.session_state.nickname)
                                     st.rerun()
                             elif spin_status == "spinning":
