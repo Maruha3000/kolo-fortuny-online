@@ -1,3 +1,4 @@
+
 import random
 import string
 import streamlit as st
@@ -111,6 +112,9 @@ def start_game_for_room(supabase, room_id):
             "guessed_letters": [],
             "current_turn_index": 0,
             "current_spin_value": 0,
+            "spin_status": "idle",
+            "last_spin_value": 0,
+            "last_spin_player": None,
         })
         .eq("id", room_id)
         .execute()
@@ -123,18 +127,24 @@ def next_turn(supabase, room_id, current_turn_index):
         .update({
             "current_turn_index": current_turn_index + 1,
             "current_spin_value": 0,
+            "spin_status": "idle",
         })
         .eq("id", room_id)
         .execute()
     )
 
 
-def spin_wheel(supabase, room_id):
+def spin_wheel(supabase, room_id, player_nickname):
     spin_value = random.choice(WHEEL_VALUES)
 
     (
         supabase.table("game_rooms")
-        .update({"current_spin_value": spin_value})
+        .update({
+            "current_spin_value": spin_value,
+            "spin_status": "spinning",
+            "last_spin_value": spin_value,
+            "last_spin_player": player_nickname,
+        })
         .eq("id", room_id)
         .execute()
     )
@@ -142,10 +152,196 @@ def spin_wheel(supabase, room_id):
     return spin_value
 
 
+def finish_spin(supabase, room_id):
+    (
+        supabase.table("game_rooms")
+        .update({"spin_status": "finished"})
+        .eq("id", room_id)
+        .execute()
+    )
+
+
+# ========== KOMPONENT HTML+JS: ANIMOWANE KOŁO ==========
+
+def render_wheel(spin_status, spin_value, player_name, is_my_turn):
+    """
+    Renders an animated CSS wheel. All players see the same animation state
+    because spin_status / spin_value / last_spin_player are stored in Supabase.
+    """
+    colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"]
+    segments = len(WHEEL_VALUES)
+    angle_per_segment = 360 / segments
+
+    # Build conic-gradient string for the wheel
+    gradient_stops = []
+    for i, val in enumerate(WHEEL_VALUES):
+        start = i * angle_per_segment
+        end = (i + 1) * angle_per_segment
+        gradient_stops.append(f"{colors[i % len(colors)]} {start}deg {end}deg")
+    conic_gradient = "conic-gradient(" + ", ".join(gradient_stops) + ")"
+
+    # Find which segment index corresponds to spin_value
+    try:
+        target_idx = WHEEL_VALUES.index(spin_value)
+    except ValueError:
+        target_idx = 0
+
+    # The pointer is at top (0 deg). To land on target_idx, we need the center
+    # of that segment to point upward. Center of segment = target_idx * angle_per_segment + angle_per_segment/2
+    target_center_angle = target_idx * angle_per_segment + angle_per_segment / 2
+    # Pointer is fixed at 0 (top), so rotate wheel by (360 - target_center_angle) + full spins
+    final_rotation = (360 - target_center_angle) % 360
+    # Add 5 full spins for effect
+    spin_degrees = 5 * 360 + final_rotation
+
+    # Determine animation class / state
+    if spin_status == "spinning":
+        anim_class = "wheel-spinning"
+        # JS will animate from 0 to spin_degrees over ~3s
+        wheel_style = f"transform: rotate({spin_degrees}deg); transition: transform 3s cubic-bezier(0.25, 0.1, 0.25, 1);"
+        overlay_visible = "true"
+    elif spin_status == "finished":
+        anim_class = "wheel-finished"
+        wheel_style = f"transform: rotate({spin_degrees}deg); transition: none;"
+        overlay_visible = "false"
+    else:
+        anim_class = "wheel-idle"
+        wheel_style = "transform: rotate(0deg); transition: none;"
+        overlay_visible = "false"
+
+    html = f"""
+    <style>
+    .wheel-container {{
+        position: relative;
+        width: 280px;
+        height: 280px;
+        margin: 20px auto;
+    }}
+    .wheel {{
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: {conic_gradient};
+        position: relative;
+        box-shadow: 0 0 20px rgba(0,0,0,0.3);
+        border: 6px solid #333;
+    }}
+    .wheel-center {{
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 50px;
+        height: 50px;
+        background: #333;
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: bold;
+        font-size: 12px;
+    }}
+    .wheel-label {{
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform-origin: 0 0;
+        font-size: 13px;
+        font-weight: bold;
+        color: #222;
+        text-shadow: 0 0 2px white;
+        white-space: nowrap;
+    }}
+    .pointer {{
+        position: absolute;
+        top: -15px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 0;
+        height: 0;
+        border-left: 15px solid transparent;
+        border-right: 15px solid transparent;
+        border-top: 25px solid #e74c3c;
+        z-index: 3;
+        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
+    }}
+    .spin-overlay {{
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0,0,0,0.75);
+        color: white;
+        padding: 15px 25px;
+        border-radius: 12px;
+        font-size: 18px;
+        font-weight: bold;
+        text-align: center;
+        z-index: 4;
+        display: none;
+        animation: popIn 0.4s ease-out;
+    }}
+    @keyframes popIn {{
+        from {{ transform: translate(-50%, -50%) scale(0.5); opacity: 0; }}
+        to   {{ transform: translate(-50%, -50%) scale(1); opacity: 1; }}
+    }}
+    </style>
+
+    <div class="wheel-container">
+        <div class="pointer"></div>
+        <div class="wheel {anim_class}" id="fortuneWheel" style="{wheel_style}">
+            <div class="wheel-center">🎡</div>
+    """
+
+    # Place value labels on the wheel
+    for i, val in enumerate(WHEEL_VALUES):
+        mid_angle = i * angle_per_segment + angle_per_segment / 2
+        # Position label at ~60% radius from center
+        rad = math.radians(mid_angle)
+        x = 50 + 35 * math.cos(rad)
+        y = 50 + 35 * math.sin(rad)
+        html += f'            <div class="wheel-label" style="transform: translate(-50%, -50%) rotate({mid_angle}deg) translateY(-75px);">{val}</div>
+'
+
+    html += f"""
+        </div>
+        <div class="spin-overlay" id="spinOverlay">
+            <div>🎯 {spin_value} pkt</div>
+            <div style="font-size:13px; margin-top:4px; opacity:0.85;">{player_name or ""}</div>
+        </div>
+    </div>
+
+    <script>
+    (function() {{
+        const overlay = document.getElementById('spinOverlay');
+        const status = "{spin_status}";
+        const isMyTurn = {"true" if is_my_turn else "false"};
+
+        if (status === "spinning") {{
+            overlay.style.display = "none";
+            // After 3s animation, show result
+            setTimeout(() => {{
+                overlay.style.display = "block";
+                overlay.innerHTML = '<div>🎯 {spin_value} pkt</div><div style="font-size:13px;margin-top:4px;opacity:0.85;">{player_name or ""}</div>';
+            }}, 3100);
+        }} else if (status === "finished") {{
+            overlay.style.display = "block";
+            overlay.innerHTML = '<div>🎯 {spin_value} pkt</div><div style="font-size:13px;margin-top:4px;opacity:0.85;">{player_name or ""}</div>';
+        }} else {{
+            overlay.style.display = "none";
+        }}
+    }})();
+    </script>
+    """
+    return html
+
+
+# ========== STRONA GŁÓWNA ==========
+
 st.title("🎡 Koło Fortuny Online")
 st.caption("Graj online ze znajomymi w jednym pokoju.")
-
-# ---------- EKRAN STARTOWY ----------
 
 if st.session_state.screen == "home":
     nickname = st.text_input(
@@ -159,14 +355,12 @@ if st.session_state.screen == "home":
     with col1:
         if st.button("Utwórz pokój", use_container_width=True):
             clean_nick = nickname.strip()
-
             if len(clean_nick) < 2:
                 st.error("Nick musi mieć co najmniej 2 znaki.")
             else:
                 try:
                     supabase = get_supabase()
                     room_code = generate_room_code()
-
                     room_response = (
                         supabase.table("game_rooms")
                         .insert({
@@ -179,13 +373,14 @@ if st.session_state.screen == "home":
                             "guessed_letters": [],
                             "current_turn_index": 0,
                             "current_spin_value": 0,
+                            "spin_status": "idle",
+                            "last_spin_value": 0,
+                            "last_spin_player": None,
                         })
                         .select("id, room_code")
                         .execute()
                     )
-
                     room = room_response.data[0]
-
                     (
                         supabase.table("game_players")
                         .insert({
@@ -196,16 +391,13 @@ if st.session_state.screen == "home":
                         })
                         .execute()
                     )
-
                     open_room(room["id"], room["room_code"], clean_nick, True)
-
                 except Exception as e:
                     st.error(f"Nie udało się utworzyć pokoju: {e}")
 
     with col2:
         if st.button("Dołącz do pokoju", use_container_width=True):
             clean_nick = nickname.strip()
-
             if len(clean_nick) < 2:
                 st.error("Nick musi mieć co najmniej 2 znaki.")
             else:
@@ -214,11 +406,10 @@ if st.session_state.screen == "home":
                 st.rerun()
 
 
-# ---------- DOŁĄCZANIE DO POKOJU ----------
+# ========== DOŁĄCZANIE DO POKOJU ==========
 
 if st.session_state.screen == "join_room":
     st.subheader("Dołączanie do pokoju")
-
     room_code_input = st.text_input("Kod pokoju", placeholder="Np. ABC123")
     col_back, col_join = st.columns(2)
 
@@ -231,13 +422,11 @@ if st.session_state.screen == "join_room":
         if st.button("Dołącz", type="primary", use_container_width=True):
             clean_nick = st.session_state.nickname.strip()
             room_code_clean = room_code_input.strip().upper()
-
             if not room_code_clean:
                 st.error("Podaj kod pokoju.")
             else:
                 try:
                     supabase = get_supabase()
-
                     room_response = (
                         supabase.table("game_rooms")
                         .select("id, room_code, status")
@@ -245,12 +434,10 @@ if st.session_state.screen == "join_room":
                         .limit(1)
                         .execute()
                     )
-
                     if not room_response.data:
                         st.error("Nie znaleziono pokoju o takim kodzie.")
                     else:
                         room = room_response.data[0]
-
                         if room["status"] != "waiting":
                             st.error("Ta gra już się rozpoczęła.")
                         else:
@@ -262,7 +449,6 @@ if st.session_state.screen == "join_room":
                                 .limit(1)
                                 .execute()
                             )
-
                             if not existing_player.data:
                                 (
                                     supabase.table("game_players")
@@ -274,17 +460,14 @@ if st.session_state.screen == "join_room":
                                     })
                                     .execute()
                                 )
-
                             open_room(room["id"], room["room_code"], clean_nick, False)
-
                 except Exception as e:
                     st.error(f"Nie udało się dołączyć do pokoju: {e}")
 
 
-# ---------- POCZEKALNIA / GRA ----------
+# ========== POCZEKALNIA / GRA ==========
 
 if st.session_state.screen in ["lobby", "game"]:
-    # Auto-odświeżanie w poczekalni i w grze co 2 sekundy
     st_autorefresh(interval=2000, key="auto_refresh", debounce=True)
 
     try:
@@ -298,18 +481,15 @@ if st.session_state.screen in ["lobby", "game"]:
                 st.subheader("Poczekalnia")
                 st.success(f"Jesteś w pokoju: {st.session_state.created_room_code}")
                 st.write(f"**Twój nick:** {st.session_state.nickname}")
-
                 st.write("### Gracze w pokoju")
                 for player in players:
                     host_label = " — host" if player["is_host"] else ""
                     st.write(f"• {player['nickname']}{host_label}")
 
                 col_refresh, col_action = st.columns(2)
-
                 with col_refresh:
                     if st.button("Odśwież listę", use_container_width=True):
                         st.rerun()
-
                 with col_action:
                     if st.session_state.is_host:
                         if st.button("Rozpocznij grę", type="primary", use_container_width=True):
@@ -320,7 +500,7 @@ if st.session_state.screen in ["lobby", "game"]:
                         st.info("Czekasz, aż host rozpocznie grę.")
 
             else:
-                # --------- GRA TRWA ---------
+                # ========== GRA TRWA ==========
                 st.session_state.screen = "game"
 
                 phrase = room.get("current_phrase") or ""
@@ -328,14 +508,15 @@ if st.session_state.screen in ["lobby", "game"]:
                 guessed_letters = room.get("guessed_letters") or []
                 current_turn_index = room.get("current_turn_index") or 0
                 current_spin_value = room.get("current_spin_value") or 0
+                spin_status = room.get("spin_status") or "idle"
+                last_spin_value = room.get("last_spin_value") or 0
+                last_spin_player = room.get("last_spin_player") or ""
 
                 masked = mask_phrase(phrase, guessed_letters)
                 current_player = get_current_player(players, current_turn_index)
                 my_player = next(
-                    (p for p in players if p["nickname"] == st.session_state.nickname),
-                    None
+                    (p for p in players if p["nickname"] == st.session_state.nickname), None
                 )
-
                 my_turn = current_player and my_player and current_player["id"] == my_player["id"]
 
                 st.subheader("Gra trwa")
@@ -345,6 +526,22 @@ if st.session_state.screen in ["lobby", "game"]:
 
                 if current_player:
                     st.info(f"Tura gracza: {current_player['nickname']}")
+
+                # --- ANIMOWANE KOŁO (widoczne dla WSZYSTKICH) ---
+                import math
+                wheel_html = render_wheel(
+                    spin_status=spin_status,
+                    spin_value=last_spin_value,
+                    player_name=last_spin_player,
+                    is_my_turn=my_turn,
+                )
+                st.components.v1.html(wheel_html, height=340)
+
+                # --- STATUS KOŁA (tekstowy dla pewności) ---
+                if spin_status == "spinning":
+                    st.write(f"🔄 **{last_spin_player}** kręci kołem...")
+                elif spin_status == "finished":
+                    st.success(f"🎯 Koło zatrzymało się na: **{last_spin_value} pkt** (kręcił: {last_spin_player})")
 
                 st.write("### Wyniki")
                 for player in players:
@@ -362,30 +559,29 @@ if st.session_state.screen in ["lobby", "game"]:
 
                     with col_spin:
                         if my_turn:
-                            if current_spin_value == 0:
+                            if spin_status == "idle":
                                 if st.button("Zakręć kołem", type="primary", use_container_width=True):
-                                    value = spin_wheel(supabase, st.session_state.created_room_id)
-                                    st.success(f"Wylosowano: {value} pkt")
+                                    value = spin_wheel(supabase, st.session_state.created_room_id, st.session_state.nickname)
                                     st.rerun()
-                            else:
+                            elif spin_status == "spinning":
+                                st.info("Koło się kręci... poczekaj!")
+                            else:  # finished
                                 st.success(f"Koło pokazuje: {current_spin_value} pkt")
+                                # Po zakończeniu animacji gracz może zgadywać
                         else:
-                            st.warning("To nie Twoja tura.")
+                            if spin_status == "spinning":
+                                st.info(f"{last_spin_player} kręci kołem...")
+                            else:
+                                st.warning("To nie Twoja tura.")
 
-                    # --- ZGADYWANIE LITERY + CAŁEGO HASŁA ---
-                    if my_turn and current_spin_value > 0:
-                        # Formularz na literę
+                    # --- ZGADYWANIE LITERY / HASŁA ---
+                    if my_turn and spin_status == "finished":
                         with st.form("guess_form"):
-                            letter_input = st.text_input(
-                                "Podaj literę",
-                                max_chars=1,
-                                key="guess_letter"
-                            )
+                            letter_input = st.text_input("Podaj literę", max_chars=1, key="guess_letter")
                             submitted_letter = st.form_submit_button("Zgadnij literę")
 
                         if submitted_letter:
                             letter = (letter_input or "").strip().upper()
-
                             if not letter or letter not in string.ascii_uppercase + "ĄĆĘŁŃÓŚŹŻ":
                                 st.error("Podaj jedną literę.")
                             elif letter in guessed_letters:
@@ -396,28 +592,23 @@ if st.session_state.screen in ["lobby", "game"]:
 
                                 (
                                     supabase.table("game_rooms")
-                                    .update({"guessed_letters": new_guessed})
+                                    .update({
+                                        "guessed_letters": new_guessed,
+                                        "spin_status": "idle",
+                                        "current_spin_value": 0,
+                                    })
                                     .eq("id", st.session_state.created_room_id)
                                     .execute()
                                 )
 
                                 if occurrences > 0:
                                     new_score = my_player["total_score"] + (occurrences * current_spin_value)
-
                                     (
                                         supabase.table("game_players")
                                         .update({"total_score": new_score})
                                         .eq("id", my_player["id"])
                                         .execute()
                                     )
-
-                                    (
-                                        supabase.table("game_rooms")
-                                        .update({"current_spin_value": 0})
-                                        .eq("id", st.session_state.created_room_id)
-                                        .execute()
-                                    )
-
                                     st.success(f"Trafiona litera: {letter}. Zdobywasz {occurrences * current_spin_value} pkt.")
                                     st.rerun()
                                 else:
@@ -425,7 +616,6 @@ if st.session_state.screen in ["lobby", "game"]:
                                     st.error(f"Brak litery: {letter}. Kolejka przechodzi dalej.")
                                     st.rerun()
 
-                        # Formularz na całe hasło
                         with st.form("guess_phrase_form"):
                             full_guess = st.text_input("Zgadnij całe hasło")
                             submitted_phrase = st.form_submit_button("Sprawdź hasło")
@@ -436,16 +626,16 @@ if st.session_state.screen in ["lobby", "game"]:
                                 st.error("Wpisz hasło.")
                             elif clean_guess == phrase:
                                 st.success(f"Brawo! Odgadłeś hasło: {phrase}")
-
-                                # odsłaniamy całe hasło dla wszystkich
                                 all_letters = list(set(list(phrase.replace(" ", ""))))
                                 (
                                     supabase.table("game_rooms")
-                                    .update({"guessed_letters": all_letters})
+                                    .update({
+                                        "guessed_letters": all_letters,
+                                        "spin_status": "idle",
+                                    })
                                     .eq("id", st.session_state.created_room_id)
                                     .execute()
                                 )
-
                                 st.rerun()
                             else:
                                 st.error("Hasło nieprawidłowe. Tracisz kolejkę.")
