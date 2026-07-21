@@ -89,13 +89,12 @@ def normalize_phrase(text):
 
 
 def mask_phrase(phrase, guessed_letters):
-    # Ujednolicenie zapisu liter z Supabase (także polskich znaków).
-    guessed_set = {str(letter).strip().upper() for letter in (guessed_letters or [])}
+    guessed_set = set(guessed_letters or [])
     visible = []
-    for char in str(phrase or ""):
+    for char in phrase:
         if char == " ":
             visible.append("  ")
-        elif char.upper() in guessed_set:
+        elif char in guessed_set:
             visible.append(char)
         else:
             visible.append("_")
@@ -235,45 +234,126 @@ def is_spin_finished(room):
 def get_sounds_js():
     return """
     <script>
-    window.kfAudio = window.kfAudio || { ctx: null, enabled: false, last: "" };
+    window.audioCtx = null;
+    window.audioInitialized = false;
 
-    window.enableKfAudio = function() {
-      try {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (!AudioCtx) return false;
-        if (!window.kfAudio.ctx) window.kfAudio.ctx = new AudioCtx();
-        if (window.kfAudio.ctx.state === "suspended") window.kfAudio.ctx.resume();
-        window.kfAudio.enabled = true;
-        return true;
-      } catch (e) { return false; }
+    window.initAudio = function() {
+        if (!window.audioInitialized) {
+            window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            window.audioInitialized = true;
+        }
+        if (window.audioCtx && window.audioCtx.state === 'suspended') {
+            window.audioCtx.resume();
+        }
     };
 
-    window.playKfSound = function(kind) {
-      if (!window.enableKfAudio()) return;
-      const ctx = window.kfAudio.ctx;
-      const beep = (frequency, duration, type, volume, delay) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = type || "sine";
-        osc.frequency.setValueAtTime(frequency, ctx.currentTime + delay);
-        gain.gain.setValueAtTime(volume || 0.08, ctx.currentTime + delay);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + duration);
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.start(ctx.currentTime + delay); osc.stop(ctx.currentTime + delay + duration);
-      };
-      if (kind === "spin") { beep(180, .12, "sawtooth", .07, 0); beep(260, .18, "sawtooth", .07, .12); }
-      else if (kind === "tick") beep(850, .035, "square", .035, 0);
-      else if (kind === "win") [523,659,784,1047].forEach((f,i)=>beep(f,.22,"sine",.09,i*.11));
-      else if (kind === "hit") { beep(880,.12,"sine",.09,0); beep(1320,.18,"sine",.08,.10); }
-      else if (kind === "miss") beep(155,.28,"sawtooth",.07,0);
-      else if (kind === "phrasewin") [392,523,659,784,1047,1319].forEach((f,i)=>beep(f,.18,"sine",.08,i*.09));
-      else if (kind === "newround") { beep(659,.16,"triangle",.08,0); beep(880,.25,"triangle",.08,.15); }
-    };
+    window.playSound = function(type) {
+        window.initAudio();
+        if (!window.audioCtx) return;
+        const ctx = window.audioCtx;
 
-    document.addEventListener("pointerdown", () => window.enableKfAudio(), { once: true });
-    document.addEventListener("keydown", () => window.enableKfAudio(), { once: true });
+        if (type === 'spin') {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(200, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.3);
+            gain.gain.setValueAtTime(0.15, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.3);
+        } else if (type === 'tick') {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(800, ctx.currentTime);
+            gain.gain.setValueAtTime(0.08, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.05);
+        } else if (type === 'win') {
+            const notes = [523, 659, 784, 1047];
+            notes.forEach((freq, i) => {
+                const o = ctx.createOscillator();
+                const g = ctx.createGain();
+                o.connect(g);
+                g.connect(ctx.destination);
+                o.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.15);
+                g.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.15);
+                g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.15 + 0.3);
+                o.start(ctx.currentTime + i * 0.15);
+                o.stop(ctx.currentTime + i * 0.15 + 0.3);
+            });
+        } else if (type === 'hit') {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.2);
+            gain.gain.setValueAtTime(0.15, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.4);
+        } else if (type === 'miss') {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(150, ctx.currentTime);
+            gain.gain.setValueAtTime(0.1, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.3);
+        } else if (type === 'phrase_win') {
+            const notes = [392, 523, 659, 784, 1047, 1319];
+            notes.forEach((freq, i) => {
+                const o = ctx.createOscillator();
+                const g = ctx.createGain();
+                o.connect(g);
+                g.connect(ctx.destination);
+                o.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.1);
+                g.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.1);
+                g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.1 + 0.25);
+                o.start(ctx.currentTime + i * 0.1);
+                o.stop(ctx.currentTime + i * 0.1 + 0.25);
+            });
+        } else if (type === 'game_over') {
+            const notes = [523, 587, 659, 784, 880, 1047, 1175, 1319];
+            notes.forEach((freq, i) => {
+                const o = ctx.createOscillator();
+                const g = ctx.createGain();
+                o.connect(g);
+                g.connect(ctx.destination);
+                o.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.12);
+                g.gain.setValueAtTime(0.1, ctx.currentTime + i * 0.12);
+                g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.12 + 0.4);
+                o.start(ctx.currentTime + i * 0.12);
+                o.stop(ctx.currentTime + i * 0.12 + 0.4);
+            });
+        } else if (type === 'new_round') {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(659, ctx.currentTime);
+            osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0.12, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.5);
+        }
+    };
     </script>
     """
+
 
 # ========== KONFETTI ==========
 
@@ -353,7 +433,7 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
         anim_class = "wheel-idle"
         wheel_style = "transform: rotate(0deg); transition: none;"
 
-    html = get_sounds_js() + f"""
+    html = f"""
     <style>
     .wheel-container {{
         position: relative;
@@ -433,9 +513,6 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
     }}
     </style>
 
-    <div style="text-align:center; margin-top:8px;">
-        <button onclick="window.enableKfAudio(); window.playKfSound('hit'); this.textContent='🔊 Dźwięk włączony'" style="padding:8px 14px; border-radius:8px; border:1px solid #555; background:#1f6feb; color:white; cursor:pointer; font-weight:bold;">🔇 Kliknij, aby włączyć dźwięk</button>
-    </div>
     <div class="wheel-container">
         <div class="pointer"></div>
         <div class="wheel {anim_class}" id="fortuneWheel" style="{wheel_style}">
@@ -472,7 +549,7 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
             let tickCount = 0;
             const tickInterval = setInterval(() => {{
                 if (window.playSound && tickCount < 8) {{
-                    window.playKfSound('tick');
+                    window.playSound('tick');
                     tickCount++;
                 }}
             }}, 350);
@@ -481,7 +558,7 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
                 clearInterval(tickInterval);
                 overlay.style.display = "block";
                 overlay.innerHTML = '<div>🎯 {spin_value} pkt</div><div style="font-size:13px;margin-top:4px;opacity:0.85;">{player_name or ""}</div>';
-                if (window.playSound) window.playKfSound('win');
+                if (window.playSound) window.playSound('win');
             }}, remaining);
         }} else if (status === "finished") {{
             overlay.style.display = "block";
@@ -493,7 +570,7 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
     </script>
     <script>
     document.addEventListener('click', function() {{
-        if (window.initAudio) window.enableKfAudio();
+        if (window.initAudio) window.initAudio();
     }}, {{once: true}});
     </script>
     """
@@ -509,7 +586,6 @@ st.components.v1.html(get_sounds_js(), height=0)
 
 if "audio_enabled" not in st.session_state:
     st.session_state.audio_enabled = False
-
 
 if st.session_state.screen == "home":
     nickname = st.text_input(
@@ -635,7 +711,7 @@ if st.session_state.screen in ["lobby", "game"]:
                 if not st.session_state.audio_enabled:
                     if st.button("🔊 Włącz dźwięki", use_container_width=True):
                         st.session_state.audio_enabled = True
-                        st.components.v1.html("<script>window.enableKfAudio();</script>", height=0)
+                        st.components.v1.html("<script>window.initAudio();</script>", height=0)
                         st.success("Dźwięki włączone! 🎵")
                         st.rerun()
                 else:
@@ -750,7 +826,7 @@ if st.session_state.screen in ["lobby", "game"]:
                     st.components.v1.html(get_confetti_html(), height=0)
                     st.subheader("🏆 KONIEC GRY 🏆")
                     sorted_players = sorted(players, key=lambda p: p.get("total_score", 0), reverse=True)
-                    st.components.v1.html("<script>if(window.playSound) window.playKfSound('game_over');</script>", height=0)
+                    st.components.v1.html("<script>if(window.playSound) window.playSound('game_over');</script>", height=0)
                     st.write("## 🎉 Podium 🎉")
                     cols = st.columns(min(3, len(sorted_players)))
                     podium_colors = ["#FFD700", "#C0C0C0", "#CD7F32"]
@@ -793,7 +869,7 @@ if st.session_state.screen in ["lobby", "game"]:
                     is_my_turn=my_turn,
                     spin_timestamp=spin_timestamp,
                 )
-                st.components.v1.html(wheel_html, height=390)
+                st.components.v1.html(wheel_html, height=340)
 
                 if spin_status == "spinning":
                     if spin_finished:
@@ -812,7 +888,7 @@ if st.session_state.screen in ["lobby", "game"]:
 
                 if phrase_guessed:
                     st.success(f"🎉 Hasło zostało odgadnięte: {phrase}")
-                    st.components.v1.html("<script>if(window.playSound) window.playKfSound('phrase_win');</script>", height=0)
+                    st.components.v1.html("<script>if(window.playSound) window.playSound('phrase_win');</script>", height=0)
                     if st.session_state.is_host:
                         if st.button("📊 Pokaż podsumowanie rundy", type="primary", use_container_width=True):
                             st.session_state.game_phase = "round_summary"
@@ -832,7 +908,7 @@ if st.session_state.screen in ["lobby", "game"]:
                         if my_turn:
                             if spin_status == "idle":
                                 if st.button("Zakręć kołem", type="primary", use_container_width=True):
-                                    st.components.v1.html("<script>window.enableKfAudio();</script>", height=0)
+                                    st.components.v1.html("<script>window.initAudio();</script>", height=0)
                                     spin_wheel(supabase, st.session_state.created_room_id, st.session_state.nickname)
                                     st.rerun()
                             elif spin_status == "spinning":
@@ -867,9 +943,8 @@ if st.session_state.screen in ["lobby", "game"]:
                             elif letter in guessed_letters:
                                 st.error("Ta litera była już podana.")
                             else:
-                                letter = letter.upper()
-                                new_guessed = sorted(set(safe_list(guessed_letters) + [letter]))
-                                occurrences = sum(1 for char in phrase.upper() if char == letter)
+                                new_guessed = guessed_letters + [letter]
+                                occurrences = phrase.count(letter)
                                 supabase.table("game_rooms").update({
                                     "guessed_letters": new_guessed,
                                     "spin_status": "idle",
@@ -881,12 +956,12 @@ if st.session_state.screen in ["lobby", "game"]:
                                     new_score = my_player["total_score"] + (occurrences * current_spin_value)
                                     supabase.table("game_players").update({"total_score": new_score}).eq("id", my_player["id"]).execute()
                                     st.success(f"Trafiona litera: {letter}. Zdobywasz {occurrences * current_spin_value} pkt.")
-                                    st.components.v1.html("<script>if(window.playSound) window.playKfSound('hit');</script>", height=0)
+                                    st.components.v1.html("<script>if(window.playSound) window.playSound('hit');</script>", height=0)
                                     st.rerun()
                                 else:
                                     next_turn(supabase, st.session_state.created_room_id, current_turn_index)
                                     st.error(f"Brak litery: {letter}. Kolejka przechodzi dalej.")
-                                    st.components.v1.html("<script>if(window.playSound) window.playKfSound('miss');</script>", height=0)
+                                    st.components.v1.html("<script>if(window.playSound) window.playSound('miss');</script>", height=0)
                                     st.rerun()
 
                         with st.form("guess_phrase_form"):
