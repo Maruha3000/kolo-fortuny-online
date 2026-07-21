@@ -19,15 +19,45 @@ DEFAULTS = {
 
 PHRASES = [
     {"category": "Filmy", "phrase": "KRÓL LEW"},
+    {"category": "Filmy", "phrase": "TITANIC"},
+    {"category": "Filmy", "phrase": "FORREST GUMP"},
+    {"category": "Filmy", "phrase": "INCEPTION"},
+    {"category": "Filmy", "phrase": "MATRIX"},
     {"category": "Muzyka", "phrase": "MICHAEL JACKSON"},
+    {"category": "Muzyka", "phrase": "QUEEN"},
+    {"category": "Muzyka", "phrase": "ABBA"},
+    {"category": "Muzyka", "phrase": "BEATLES"},
+    {"category": "Muzyka", "phrase": "FREDERIC CHOPIN"},
     {"category": "Powiedzenia", "phrase": "LEPSZY WRÓBEL W GARŚCI"},
+    {"category": "Powiedzenia", "phrase": "GDZIE KUCHAREK SZEŚĆ TAM NIE MA CO JEŚĆ"},
+    {"category": "Powiedzenia", "phrase": "NIE MA DYMU BEZ OGNIA"},
+    {"category": "Powiedzenia", "phrase": "CO ZA DUŻO TO NIE ZDROWO"},
+    {"category": "Powiedzenia", "phrase": "BEZ PRACY NIE MA KOŁACZY"},
     {"category": "Sport", "phrase": "ROBERT LEWANDOWSKI"},
+    {"category": "Sport", "phrase": "LEO MESSI"},
+    {"category": "Sport", "phrase": "RAFAEL NADAL"},
+    {"category": "Sport", "phrase": "USAIN BOLT"},
+    {"category": "Sport", "phrase": "MICHAEL JORDAN"},
     {"category": "Podróże", "phrase": "WAKACJE NAD MORZEM"},
+    {"category": "Podróże", "phrase": "WIZYTA W PARYŻU"},
+    {"category": "Podróże", "phrase": "WYCIECZKA W GÓRY"},
+    {"category": "Podróże", "phrase": "SAFARI W AFRYCE"},
+    {"category": "Podróże", "phrase": "REJS DOOKOŁA ŚWIATA"},
     {"category": "Jedzenie", "phrase": "PIZZA Z SEREM"},
+    {"category": "Jedzenie", "phrase": "SCHABOWY Z ZIEMNIAKAMI"},
+    {"category": "Jedzenie", "phrase": "ROSÓŁ Z MAKARONEM"},
+    {"category": "Jedzenie", "phrase": "PIEROGI RUSKIE"},
+    {"category": "Jedzenie", "phrase": "BIGOS Z KAPUSTY"},
+    {"category": "Technologia", "phrase": "SZTUCZNA INTELIGENCJA"},
+    {"category": "Technologia", "phrase": "INTERNET RZECZY"},
+    {"category": "Technologia", "phrase": "WIRTUALNA RZECZYWISTOŚĆ"},
+    {"category": "Technologia", "phrase": "BLOCKCHAIN"},
+    {"category": "Technologia", "phrase": "KOMPUTER KWANTOWY"},
 ]
 
 WHEEL_VALUES = [100, 150, 200, 250, 300, 400, 500, 700]
 SPIN_DURATION_SECONDS = 3
+TOTAL_ROUNDS = 3
 
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
@@ -73,6 +103,15 @@ def mask_phrase(phrase, guessed_letters):
     return " ".join(visible)
 
 
+def safe_list(value):
+    """Convert None/NULL to empty list, or return list as-is."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return []
+
+
 def get_room_and_players(supabase, room_id):
     room_response = (
         supabase.table("game_rooms")
@@ -84,7 +123,7 @@ def get_room_and_players(supabase, room_id):
 
     players_response = (
         supabase.table("game_players")
-        .select("id, nickname, is_host, total_score")
+        .select("id, nickname, is_host, total_score, round_scores")
         .eq("room_id", room_id)
         .order("is_host", desc=True)
         .execute()
@@ -118,7 +157,68 @@ def start_game_for_room(supabase, room_id):
             "last_spin_value": 0,
             "last_spin_player": None,
             "spin_timestamp": None,
+            "current_round": 1,
+            "round_phrases": [phrase],
+            "used_phrases": [phrase],
+            "game_phase": "playing",
         })
+        .eq("id", room_id)
+        .execute()
+    )
+
+    # Reset round scores for all players
+    players = supabase.table("game_players").select("id").eq("room_id", room_id).execute()
+    for p in players.data:
+        supabase.table("game_players").update({
+            "round_scores": [],
+            "total_score": 0,
+        }).eq("id", p["id"]).execute()
+
+
+def next_round(supabase, room_id, used_phrases, current_round):
+    available = [p for p in PHRASES if normalize_phrase(p["phrase"]) not in used_phrases]
+    if not available:
+        available = PHRASES
+
+    selected = random.choice(available)
+    phrase = normalize_phrase(selected["phrase"])
+    new_used = used_phrases + [phrase]
+
+    (
+        supabase.table("game_rooms")
+        .update({
+            "current_phrase": phrase,
+            "current_category": selected["category"],
+            "guessed_letters": [],
+            "current_turn_index": 0,
+            "current_spin_value": 0,
+            "spin_status": "idle",
+            "last_spin_value": 0,
+            "last_spin_player": None,
+            "spin_timestamp": None,
+            "current_round": current_round + 1,
+            "round_phrases": new_used,
+            "used_phrases": new_used,
+            "game_phase": "playing",
+        })
+        .eq("id", room_id)
+        .execute()
+    )
+
+
+def show_round_summary(supabase, room_id):
+    (
+        supabase.table("game_rooms")
+        .update({"game_phase": "round_summary"})
+        .eq("id", room_id)
+        .execute()
+    )
+
+
+def show_game_over(supabase, room_id):
+    (
+        supabase.table("game_rooms")
+        .update({"game_phase": "game_over"})
         .eq("id", room_id)
         .execute()
     )
@@ -159,13 +259,11 @@ def spin_wheel(supabase, room_id, player_nickname):
 
 
 def is_spin_finished(room):
-    """Check if 3 seconds have passed since spin started."""
     spin_ts = room.get("spin_timestamp")
     if not spin_ts:
         return False
     try:
-        # Parse ISO timestamp
-        ts = datetime.fromisoformat(spin_ts.replace("Z", "+00:00"))
+        ts = datetime.fromisoformat(str(spin_ts).replace("Z", "+00:00"))
         now = datetime.now(timezone.utc)
         elapsed = (now - ts).total_seconds()
         return elapsed >= SPIN_DURATION_SECONDS
@@ -173,14 +271,164 @@ def is_spin_finished(room):
         return False
 
 
-# ========== KOMPONENT HTML+JS: ANIMOWANE KOŁO ==========
+# ========== DŹWIĘKI JS (Web Audio API) ==========
+
+def get_sounds_js():
+    return """
+    <script>
+    window.playSound = function(type) {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        if (type === 'spin') {
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(200, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.3);
+            gain.gain.setValueAtTime(0.15, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.3);
+        } else if (type === 'tick') {
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(800, ctx.currentTime);
+            gain.gain.setValueAtTime(0.08, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.05);
+        } else if (type === 'win') {
+            osc.type = 'sine';
+            const notes = [523, 659, 784, 1047];
+            notes.forEach((freq, i) => {
+                const o = ctx.createOscillator();
+                const g = ctx.createGain();
+                o.connect(g);
+                g.connect(ctx.destination);
+                o.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.15);
+                g.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.15);
+                g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.15 + 0.3);
+                o.start(ctx.currentTime + i * 0.15);
+                o.stop(ctx.currentTime + i * 0.15 + 0.3);
+            });
+            return;
+        } else if (type === 'hit') {
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.2);
+            gain.gain.setValueAtTime(0.15, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.4);
+        } else if (type === 'miss') {
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(150, ctx.currentTime);
+            gain.gain.setValueAtTime(0.1, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.3);
+        } else if (type === 'phrase_win') {
+            osc.type = 'sine';
+            const notes = [392, 523, 659, 784, 1047, 1319];
+            notes.forEach((freq, i) => {
+                const o = ctx.createOscillator();
+                const g = ctx.createGain();
+                o.connect(g);
+                g.connect(ctx.destination);
+                o.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.1);
+                g.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.1);
+                g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.1 + 0.25);
+                o.start(ctx.currentTime + i * 0.1);
+                o.stop(ctx.currentTime + i * 0.1 + 0.25);
+            });
+            return;
+        } else if (type === 'game_over') {
+            osc.type = 'sine';
+            const notes = [523, 587, 659, 784, 880, 1047, 1175, 1319];
+            notes.forEach((freq, i) => {
+                const o = ctx.createOscillator();
+                const g = ctx.createGain();
+                o.connect(g);
+                g.connect(ctx.destination);
+                o.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.12);
+                g.gain.setValueAtTime(0.1, ctx.currentTime + i * 0.12);
+                g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.12 + 0.4);
+                o.start(ctx.currentTime + i * 0.12);
+                o.stop(ctx.currentTime + i * 0.12 + 0.4);
+            });
+            return;
+        } else if (type === 'new_round') {
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(659, ctx.currentTime);
+            osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0.12, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.5);
+        }
+
+        if (type !== 'win' && type !== 'phrase_win' && type !== 'game_over' && type !== 'new_round') {
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.3);
+        }
+    };
+    </script>
+    """
+
+
+# ========== KONFETTI ANIMACJA ==========
+
+def get_confetti_html():
+    return """
+    <style>
+    .confetti-container {
+        position: fixed;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        pointer-events: none;
+        z-index: 9999;
+        overflow: hidden;
+    }
+    .confetti {
+        position: absolute;
+        width: 10px; height: 10px;
+        animation: confetti-fall 3s ease-out forwards;
+    }
+    @keyframes confetti-fall {
+        0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; }
+        100% { transform: translateY(110vh) rotate(720deg); opacity: 0; }
+    }
+    </style>
+    <script>
+    (function() {
+        const container = document.createElement('div');
+        container.className = 'confetti-container';
+        const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFEAA7', '#DDA0DD', '#96CEB4', '#F7DC6F'];
+        for (let i = 0; i < 80; i++) {
+            const c = document.createElement('div');
+            c.className = 'confetti';
+            c.style.left = Math.random() * 100 + 'vw';
+            c.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+            c.style.animationDelay = Math.random() * 2 + 's';
+            c.style.animationDuration = (2 + Math.random() * 2) + 's';
+            c.style.borderRadius = Math.random() > 0.5 ? '50%' : '0';
+            container.appendChild(c);
+        }
+        document.body.appendChild(container);
+        setTimeout(() => container.remove(), 5000);
+    })();
+    </script>
+    """
+
+
+# ========== ANIMOWANE KOŁO ==========
 
 def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestamp):
     colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"]
     segments = len(WHEEL_VALUES)
     angle_per_segment = 360 / segments
 
-    # Build conic-gradient string for the wheel
     gradient_stops = []
     for i, val in enumerate(WHEEL_VALUES):
         start = i * angle_per_segment
@@ -188,7 +436,6 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
         gradient_stops.append(f"{colors[i % len(colors)]} {start}deg {end}deg")
     conic_gradient = "conic-gradient(" + ", ".join(gradient_stops) + ")"
 
-    # Find which segment index corresponds to spin_value
     try:
         target_idx = WHEEL_VALUES.index(spin_value)
     except ValueError:
@@ -315,15 +562,25 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
 
         if (status === "spinning") {{
             overlay.style.display = "none";
-            // Always show animation for 3 seconds from the timestamp
             let elapsed = 0;
             if (spinTs) {{
                 elapsed = (Date.now() - new Date(spinTs).getTime()) / 1000;
             }}
             let remaining = Math.max(0, 3100 - elapsed * 1000);
+
+            let tickCount = 0;
+            const tickInterval = setInterval(() => {{
+                if (window.playSound && tickCount < 8) {{
+                    window.playSound('tick');
+                    tickCount++;
+                }}
+            }}, 350);
+
             setTimeout(() => {{
+                clearInterval(tickInterval);
                 overlay.style.display = "block";
                 overlay.innerHTML = '<div>🎯 {spin_value} pkt</div><div style="font-size:13px;margin-top:4px;opacity:0.85;">{player_name or ""}</div>';
+                if (window.playSound) window.playSound('win');
             }}, remaining);
         }} else if (status === "finished") {{
             overlay.style.display = "block";
@@ -341,6 +598,8 @@ def render_wheel(spin_status, spin_value, player_name, is_my_turn, spin_timestam
 
 st.title("🎡 Koło Fortuny Online")
 st.caption("Graj online ze znajomymi w jednym pokoju.")
+
+st.components.v1.html(get_sounds_js(), height=0)
 
 if st.session_state.screen == "home":
     nickname = st.text_input(
@@ -376,6 +635,10 @@ if st.session_state.screen == "home":
                             "last_spin_value": 0,
                             "last_spin_player": None,
                             "spin_timestamp": None,
+                            "current_round": 1,
+                            "round_phrases": [],
+                            "used_phrases": [],
+                            "game_phase": "playing",
                         })
                         .select("id, room_code")
                         .execute()
@@ -387,7 +650,8 @@ if st.session_state.screen == "home":
                             "room_id": room["id"],
                             "nickname": clean_nick,
                             "is_host": True,
-                            "total_score": 0
+                            "total_score": 0,
+                            "round_scores": [],
                         })
                         .execute()
                     )
@@ -456,7 +720,8 @@ if st.session_state.screen == "join_room":
                                         "room_id": room["id"],
                                         "nickname": clean_nick,
                                         "is_host": False,
-                                        "total_score": 0
+                                        "total_score": 0,
+                                        "round_scores": [],
                                     })
                                     .execute()
                                 )
@@ -512,8 +777,11 @@ if st.session_state.screen in ["lobby", "game"]:
                 last_spin_value = room.get("last_spin_value") or 0
                 last_spin_player = room.get("last_spin_player") or ""
                 spin_timestamp = room.get("spin_timestamp")
+                current_round = room.get("current_round") or 1
+                game_phase = room.get("game_phase") or "playing"
+                round_phrases = safe_list(room.get("round_phrases"))
+                used_phrases = safe_list(room.get("used_phrases"))
 
-                # Check if spin animation should be considered finished
                 spin_finished = is_spin_finished(room)
 
                 masked = mask_phrase(phrase, guessed_letters)
@@ -523,7 +791,84 @@ if st.session_state.screen in ["lobby", "game"]:
                 )
                 my_turn = current_player and my_player and current_player["id"] == my_player["id"]
 
-                st.subheader("Gra trwa")
+                # ========== PODSUMOWANIE RUNDY ==========
+                if game_phase == "round_summary":
+                    st.subheader(f"📊 Podsumowanie rundy {current_round}")
+                    st.balloons()
+
+                    sorted_players = sorted(players, key=lambda p: p.get("total_score", 0), reverse=True)
+
+                    st.write("### Wyniki po tej rundzie:")
+                    for i, player in enumerate(sorted_players, 1):
+                        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                        st.write(f"{medal} **{player['nickname']}**: {player['total_score']} pkt")
+
+                    st.write(f"### Hasło w tej rundzie: `{phrase}`")
+                    st.write(f"**Kategoria:** {category}")
+
+                    if st.session_state.is_host:
+                        if current_round >= TOTAL_ROUNDS:
+                            if st.button("🏆 Zakończ grę i pokaż wyniki", type="primary", use_container_width=True):
+                                show_game_over(supabase, st.session_state.created_room_id)
+                                st.rerun()
+                        else:
+                            if st.button("➡️ Następna runda", type="primary", use_container_width=True):
+                                next_round(supabase, st.session_state.created_room_id, used_phrases, current_round)
+                                st.rerun()
+                    else:
+                        if current_round >= TOTAL_ROUNDS:
+                            st.info("Czekasz na zakończenie gry przez hosta...")
+                        else:
+                            st.info("Czekasz, aż host rozpocznie następną rundę...")
+
+                    if st.button("Wróć do strony głównej"):
+                        st.session_state.screen = "home"
+                        st.rerun()
+
+                    st.stop()
+
+                # ========== KONIEC GRY - PODIUM ==========
+                if game_phase == "game_over":
+                    st.components.v1.html(get_confetti_html(), height=0)
+
+                    st.subheader("🏆 KONIEC GRY 🏆")
+
+                    sorted_players = sorted(players, key=lambda p: p.get("total_score", 0), reverse=True)
+
+                    st.components.v1.html("""
+                    <script>if(window.playSound) window.playSound('game_over');</script>
+                    """, height=0)
+
+                    st.write("## 🎉 Podium 🎉")
+
+                    cols = st.columns(min(3, len(sorted_players)))
+                    podium_colors = ["#FFD700", "#C0C0C0", "#CD7F32"]
+                    podium_emojis = ["🥇", "🥈", "🥉"]
+
+                    for i, (col, player) in enumerate(zip(cols, sorted_players)):
+                        with col:
+                            st.markdown(f"""
+                            <div style="text-align:center; padding:20px; background:{podium_colors[i]}; 
+                            border-radius:15px; margin:10px 0; box-shadow:0 4px 15px rgba(0,0,0,0.2);">
+                                <div style="font-size:40px;">{podium_emojis[i]}</div>
+                                <div style="font-size:20px; font-weight:bold; color:#333;">{player['nickname']}</div>
+                                <div style="font-size:24px; color:#333;">{player['total_score']} pkt</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                    if len(sorted_players) > 3:
+                        st.write("### Pozostali gracze:")
+                        for i, player in enumerate(sorted_players[3:], 4):
+                            st.write(f"{i}. {player['nickname']}: {player['total_score']} pkt")
+
+                    if st.button("🔄 Nowa gra", use_container_width=True):
+                        st.session_state.screen = "home"
+                        st.rerun()
+
+                    st.stop()
+
+                # ========== NORMALNA GRA ==========
+                st.subheader(f"🎡 Runda {current_round} / {TOTAL_ROUNDS}")
                 st.write(f"**Kod pokoju:** {st.session_state.created_room_code}")
                 st.write(f"**Kategoria:** {category}")
                 st.write(f"**Hasło:** `{masked}`")
@@ -531,7 +876,7 @@ if st.session_state.screen in ["lobby", "game"]:
                 if current_player:
                     st.info(f"Tura gracza: {current_player['nickname']}")
 
-                # --- ANIMOWANE KOŁO (widoczne dla WSZYSTKICH) ---
+                # --- ANIMOWANE KOŁO ---
                 import math
                 wheel_html = render_wheel(
                     spin_status=spin_status,
@@ -556,8 +901,37 @@ if st.session_state.screen in ["lobby", "game"]:
                     marker = " ← teraz gra" if current_player and player["id"] == current_player["id"] else ""
                     st.write(f"• {player['nickname']}: {player['total_score']} pkt{marker}")
 
-                if "_" not in masked:
-                    st.success(f"Hasło zostało odgadnięte: {phrase}")
+                phrase_guessed = "_" not in masked
+
+                if phrase_guessed:
+                    st.success(f"🎉 Hasło zostało odgadnięte: {phrase}")
+
+                    st.components.v1.html("""
+                    <script>if(window.playSound) window.playSound('phrase_win');</script>
+                    """, height=0)
+
+                    # Save round scores
+                    for player in players:
+                        current_total = player.get("total_score", 0)
+                        round_scores = safe_list(player.get("round_scores"))
+                        if len(round_scores) < current_round:
+                            round_scores.append(current_total)
+                            supabase.table("game_players").update({
+                                "round_scores": round_scores,
+                            }).eq("id", player["id"]).execute()
+
+                    if st.session_state.is_host:
+                        if st.button("📊 Pokaż podsumowanie rundy", type="primary", use_container_width=True):
+                            show_round_summary(supabase, st.session_state.created_room_id)
+                            st.rerun()
+                    else:
+                        st.info("Czekasz na podsumowanie rundy...")
+
+                    if st.button("Wróć do strony głównej"):
+                        st.session_state.screen = "home"
+                        st.rerun()
+
+                    st.stop()
                 else:
                     col_refresh, col_spin = st.columns(2)
 
@@ -573,9 +947,7 @@ if st.session_state.screen in ["lobby", "game"]:
                                     st.rerun()
                             elif spin_status == "spinning":
                                 if spin_finished:
-                                    # Spin finished on server side, allow guessing
                                     if st.button("Zgaduj!", type="primary", use_container_width=True):
-                                        # Update status to finished so forms show
                                         (
                                             supabase.table("game_rooms")
                                             .update({"spin_status": "finished"})
@@ -585,7 +957,7 @@ if st.session_state.screen in ["lobby", "game"]:
                                         st.rerun()
                                 else:
                                     st.info("Koło się kręci... poczekaj!")
-                            else:  # finished
+                            else:
                                 st.success(f"Koło pokazuje: {current_spin_value} pkt")
                         else:
                             if spin_status == "spinning":
@@ -593,12 +965,10 @@ if st.session_state.screen in ["lobby", "game"]:
                             else:
                                 st.warning("To nie Twoja tura.")
 
-                    # --- ZGADYWANIE LITERY / HASŁA ---
-                    # Show guessing forms when: my turn AND (spin is finished OR spin has timed out)
+                    # --- ZGADYWANIE ---
                     can_guess = my_turn and (spin_status == "finished" or (spin_status == "spinning" and spin_finished))
 
                     if can_guess:
-                        # If spin just timed out but status is still "spinning", update it
                         if spin_status == "spinning" and spin_finished:
                             (
                                 supabase.table("game_rooms")
@@ -642,10 +1012,16 @@ if st.session_state.screen in ["lobby", "game"]:
                                         .execute()
                                     )
                                     st.success(f"Trafiona litera: {letter}. Zdobywasz {occurrences * current_spin_value} pkt.")
+                                    st.components.v1.html("""
+                                    <script>if(window.playSound) window.playSound('hit');</script>
+                                    """, height=0)
                                     st.rerun()
                                 else:
                                     next_turn(supabase, st.session_state.created_room_id, current_turn_index)
                                     st.error(f"Brak litery: {letter}. Kolejka przechodzi dalej.")
+                                    st.components.v1.html("""
+                                    <script>if(window.playSound) window.playSound('miss');</script>
+                                    """, height=0)
                                     st.rerun()
 
                         with st.form("guess_phrase_form"):
